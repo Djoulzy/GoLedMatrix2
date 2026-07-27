@@ -1,1 +1,292 @@
 # GoLedMatrix2
+
+Serveur d’affichage léger pour matrices LED RGB HUB75 pilotées par Raspberry Pi,
+et client Go chargé de préparer puis d’envoyer les images.
+
+Le projet s’appuie sur
+[`rpi-rgb-led-matrix`](https://github.com/hzeller/rpi-rgb-led-matrix) et reprend
+l’API du wrapper
+[`go-rpi-rgb-led-matrix`](https://github.com/zaggash/go-rpi-rgb-led-matrix).
+La version utilisée est épinglée à
+`v0.0.0-20231128121715-f3ceee87d19f`.
+
+## État du projet
+
+Fondations disponibles :
+
+- serveur HTTP versionné et client en ligne de commande ;
+- protocole RGB24 brut, sans décodage ni composition sur le Raspberry Pi ;
+- file à une seule trame logique : si plusieurs images arrivent pendant un
+  rendu, seule la plus récente est conservée ;
+- backend matériel Linux/Raspberry Pi isolé derrière les build tags
+  `linux,cgo,rpi` ;
+- backend mémoire portable pour macOS, Linux, le développement et les tests ;
+- configuration TOML stricte du matériel, du runtime GPIO et du serveur HTTP ;
+- arrêt propre, limites de taille, timeouts HTTP et tests avec race detector ;
+- dépendances Go et bibliothèque C++ épinglées.
+
+À venir :
+
+- authentification et TLS pour une exposition hors réseau local ;
+- aperçu graphique du backend de développement ;
+- bibliothèque de composition et ordonnanceur d’animations côté client ;
+- métriques et mesures de débit/latence sur le matériel cible ;
+- paquet/service `systemd` et procédure d’installation automatisée.
+
+## Architecture
+
+Le client compose une image à la géométrie exacte de la dalle, la convertit en
+RGB24 puis l’envoie. Le serveur valide la taille, remplace la trame en attente et
+effectue un `Render()` sur le prochain VSync.
+
+`rpi-rgb-led-matrix` conserve ensuite cette image dans son buffer natif et
+rafraîchit continuellement les GPIO. Il n’existe volontairement **aucune boucle
+Go qui redessine une image inchangée** : elle consommerait du CPU et introduirait
+de la gigue sans améliorer la stabilité.
+
+```text
+composition/PNG (client) -> RGB24 -> HTTP -> dernière trame -> Render/VSync
+                                                           -> scan GPIO natif
+```
+
+## Protocole HTTP v1
+
+Le protocole est volontairement minimal et orienté réseau local.
+
+### `GET /healthz`
+
+Retourne `200 OK` lorsque le processus HTTP répond.
+
+### `GET /v1/info`
+
+Décrit le contrat attendu par le serveur :
+
+```json
+{
+  "protocol_version": "1",
+  "width": 64,
+  "height": 32,
+  "pixel_format": "rgb24",
+  "frame_bytes": 6144,
+  "backend": "memory",
+  "stats": {"accepted": 0, "rendered": 0, "failed": 0}
+}
+```
+
+### `PUT /v1/frame`
+
+- `Content-Type: application/vnd.goledmatrix.rgb24`
+- corps de `width × height × 3` octets exactement ;
+- pixels ordonnés par lignes, depuis le coin supérieur gauche ;
+- trois octets par pixel : rouge, vert, bleu ;
+- réponse `202 Accepted` avec `{"sequence": N}`.
+
+`202` signifie que la trame a été validée et mise en attente. Elle peut être
+remplacée par une trame plus récente avant le rendu si le producteur dépasse la
+capacité du matériel. Ce choix évite d’accumuler une animation déjà périmée.
+
+Les erreurs utilisent `application/problem+json`. La version 1 n’inclut ni
+compression, ni redimensionnement, ni delta entre images : ces opérations
+coûteuses restent du côté client.
+
+## Configuration du serveur
+
+Le fichier complet de référence est
+[`config.example.toml`](config.example.toml). Pour l’utiliser :
+
+```bash
+cp config.example.toml server.toml
+go run ./cmd/ledmatrix-server -config server.toml -check-config
+go run ./cmd/ledmatrix-server -backend memory -config server.toml
+```
+
+Sur le Raspberry Pi, remplacer `-backend memory` par `-backend rpi`.
+
+```toml
+[HardwareConfig]
+Rows                    = 32
+Cols                    = 64
+ChainLength             = 4
+Parallel                = 2
+PWMBits                 = 11
+PWMLSBNanoseconds       = 130
+PWMDitherBits           = 0
+Brightness              = 100
+ScanMode                = 0
+HardwareMapping         = "regular"
+ShowRefreshRate         = true
+InverseColors           = false
+DisableHardwarePulsing  = false
+PixelMapperConfig       = "V-mapper"
+LimitRefreshRateHz      = 70
+Multiplexing            = 0
+
+[RuntimeOptions]
+GpioSlowdown            = 5
+Daemon                  = 0
+DropPrivileges          = -1
+DoGpioInit              = true
+
+[HTTPserver]
+Addr                    = "detect"
+Port                    = 8080
+Enabled                 = true
+```
+
+Les valeurs sont appliquées dans cet ordre :
+
+1. valeurs par défaut internes ;
+2. fichier indiqué par `-config` ;
+3. options CLI explicitement présentes.
+
+Une clé inconnue ou une valeur hors limites empêche le démarrage. Cela évite
+qu’une faute de frappe laisse la dalle fonctionner avec un réglage implicite.
+Les clés absentes conservent leur valeur par défaut.
+
+`Addr = "detect"` écoute sur toutes les interfaces (`:Port`). Une adresse IP ou
+un nom d’hôte peut être donné pour restreindre l’écoute. `Enabled = false`
+initialise le backend puis désactive l’API HTTP ; le processus attend uniquement
+un signal d’arrêt.
+
+`Daemon`, `DropPrivileges` et `DoGpioInit` sont conservés dans le format afin de
+rester compatibles avec le fichier initial, mais ne sont pas transmis au
+wrapper pour le moment. Seul `GpioSlowdown` est appliqué depuis
+`RuntimeOptions`. Le fonctionnement en service sera pris en charge par
+`systemd`.
+
+## Développement sur macOS ou Linux
+
+Prérequis : Go 1.22 ou supérieur.
+
+```bash
+git clone --recurse-submodules https://github.com/Djoulzy/GoLedMatrix2.git
+cd GoLedMatrix2
+make test
+make build
+```
+
+Démarrer un serveur sans dalle :
+
+```bash
+go run ./cmd/ledmatrix-server -backend memory -rows 32 -cols 64
+```
+
+Pour afficher la matrice dans une fenêtre graphique :
+
+```bash
+go run ./cmd/ledmatrix-server \
+  -simulate \
+  -config server.toml
+```
+
+`-simulate` est prioritaire sur `-backend` : aucune initialisation GPIO et
+aucune communication avec la dalle ne sont effectuées. L’API HTTP reste
+identique et `/v1/info` annonce le backend `simulation`. Le simulateur calcule
+d'abord la géométrie physique avec `Cols × ChainLength` et
+`Rows × Parallel`, puis applique dans l'ordre les transformations de
+`PixelMapperConfig`. Par exemple, `64 × 32`, `ChainLength = 4`,
+`Parallel = 2` et `V-mapper` donnent une surface logique de `128 × 128`.
+
+La taille visuelle des LED peut être ajustée, notamment pour les grandes
+matrices :
+
+```bash
+go run ./cmd/ledmatrix-server \
+  -simulate \
+  -simulation-pixel-pitch 4 \
+  -config server.toml
+```
+
+Le mode graphique nécessite une session de bureau active. Sous Linux, les
+dépendances X11/OpenGL indiquées dans la procédure Raspberry Pi sont également
+requises. Les mappers `V-mapper`, `U-mapper`, `StackToRow`, `Rotate` et
+`Mirror` sont pris en charge pour le calcul de la géométrie simulée, y compris
+lorsqu'ils sont chaînés avec `;`. Un mapper non pris en charge provoque une
+erreur explicite au démarrage afin d'éviter d'afficher une géométrie fausse.
+Fermer la fenêtre ou appuyer sur `Échap` arrête proprement le serveur.
+
+Envoyer une couleur ou une image aux dimensions exactes :
+
+```bash
+go run ./cmd/ledmatrix-client -server http://localhost:8080 -color '#2040ff'
+go run ./cmd/ledmatrix-client -server http://localhost:8080 -image frame.png
+```
+
+Les PNG et JPEG sont décodés côté client. Aucun redimensionnement implicite
+n’est effectué afin d’éviter les erreurs silencieuses de cadrage.
+
+## Build et exécution sur Raspberry Pi
+
+La bibliothèque native recommande un système Linux minimal sans interface
+graphique. Le câblage, l’alimentation 5 V, le modèle de dalle et les paramètres
+de multiplexage doivent être validés avec ses exemples avant ce serveur.
+
+Sur Raspberry Pi OS/Debian :
+
+```bash
+sudo apt update
+sudo apt install -y build-essential git libx11-dev libgl1-mesa-dev
+git clone --recurse-submodules https://github.com/Djoulzy/GoLedMatrix2.git
+cd GoLedMatrix2
+cp config.example.toml server.toml
+make native
+make build-rpi
+sudo ./bin/ledmatrix-server \
+  -backend rpi \
+  -config server.toml
+```
+
+Le wrapper cherche normalement ses en-têtes et sa bibliothèque native dans son
+propre répertoire `lib/rpi-rgb-led-matrix`, absent des archives du proxy Go.
+Le `Makefile` fournit donc `CGO_CFLAGS` et `CGO_LDFLAGS` pour utiliser notre
+sous-module épinglé dans `third_party/_rpi-rgb-led-matrix/`. Le préfixe `_`
+empêche `go test ./...` d’interpréter par erreur l’arborescence C++ comme des
+packages Go.
+
+Options utiles du serveur :
+
+- `-brightness 1..100`
+- `-pwm-bits 1..11` : une valeur plus basse augmente le taux de rafraîchissement
+  au prix de la profondeur de couleur ;
+- `-pwm-lsb-ns 130`
+- `-pwm-dither-bits 0..2`
+- `-gpio-slowdown 0..60`
+- `-pixel-mapper V-mapper`
+- `-limit-refresh 70`
+- `-multiplexing 0`
+- `-show-refresh`
+- `-hardware-mapping regular` (ou le mapping correspondant à la carte utilisée).
+
+Le binaire matériel doit être construit sur Linux avec CGO. Le build standard,
+sans `-tags rpi`, reste portable et ne lie aucune bibliothèque GPIO.
+
+## Choix de performance
+
+- RGB24 évite la décompression PNG/JPEG sur le Pi.
+- La géométrie fixe rend la validation constante et borne strictement la mémoire.
+- Un seul goroutine appelle le driver natif.
+- La stratégie « dernière trame gagnante » borne la file et la latence.
+- La bibliothèque native réalise le double buffering et attend le VSync.
+- Une connexion HTTP persistante est réutilisée par le client Go.
+
+La fréquence d’animation réellement soutenable dépend surtout de la taille,
+du chaînage, du multiplexage, de `pwm-bits`, du modèle de Pi et de la dalle.
+Elle devra être mesurée sur le montage réel avant de fixer une cadence client.
+
+## Commandes de contrôle
+
+```bash
+make test
+make build
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./cmd/...
+```
+
+La dernière commande vérifie la séparation portable ; elle ne produit pas le
+backend matériel, qui exige CGO et la bibliothèque native.
+
+## Licence
+
+À définir pour le code de ce dépôt. Attention : `rpi-rgb-led-matrix` est sous
+GPL-2.0-or-later, tandis que le wrapper Go `zaggash` est sous licence MIT. La
+distribution d’un binaire lié à la bibliothèque native doit respecter les
+obligations de la GPL.
