@@ -36,6 +36,9 @@ Enabled = true
 	if loaded.Runtime.GPIOSlowdown != 5 {
 		t.Fatalf("GpioSlowdown = %d, want 5", loaded.Runtime.GPIOSlowdown)
 	}
+	if loaded.HTTP.InfoDisplaySeconds != 5 {
+		t.Fatalf("InfoDisplaySeconds = %d, want default 5", loaded.HTTP.InfoDisplaySeconds)
+	}
 	address, err := loaded.HTTP.ListenAddress()
 	if err != nil {
 		t.Fatal(err)
@@ -56,6 +59,14 @@ func TestLoadRejectsUnknownKey(t *testing.T) {
 func TestValidateRejectsInvalidValues(t *testing.T) {
 	config := Default()
 	config.Hardware.PWMDitherBits = 3
+	if err := config.Validate(); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestValidateRejectsInvalidInfoDisplayDuration(t *testing.T) {
+	config := Default()
+	config.HTTP.InfoDisplaySeconds = 61
 	if err := config.Validate(); err == nil {
 		t.Fatal("expected validation error")
 	}

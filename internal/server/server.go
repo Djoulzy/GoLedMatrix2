@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"time"
 
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
@@ -21,6 +22,11 @@ type API struct {
 	frameSize int
 	backend   string
 	renderer  *render.Renderer
+	startedAt time.Time
+	baseURLs  []string
+
+	technicalFrame    func(Info) (frame.Frame, error)
+	technicalDuration time.Duration
 }
 
 type Info struct {
@@ -30,10 +36,34 @@ type Info struct {
 	PixelFormat     string       `json:"pixel_format"`
 	FrameBytes      int          `json:"frame_bytes"`
 	Backend         string       `json:"backend"`
+	BaseURLs        []string     `json:"base_urls"`
+	StartedAt       time.Time    `json:"started_at"`
+	UptimeSeconds   int64        `json:"uptime_seconds"`
 	Stats           render.Stats `json:"stats"`
 }
 
-func New(width, height int, backend string, renderer *render.Renderer) (*API, error) {
+type Option func(*API) error
+
+func WithTechnicalDisplay(
+	baseURLs []string,
+	duration time.Duration,
+	builder func(Info) (frame.Frame, error),
+) Option {
+	return func(api *API) error {
+		if duration <= 0 {
+			return errors.New("technical information duration must be positive")
+		}
+		if builder == nil {
+			return errors.New("technical information frame builder is required")
+		}
+		api.baseURLs = append([]string(nil), baseURLs...)
+		api.technicalDuration = duration
+		api.technicalFrame = builder
+		return nil
+	}
+}
+
+func New(width, height int, backend string, renderer *render.Renderer, options ...Option) (*API, error) {
 	frameSize, err := frame.ByteLen(width, height)
 	if err != nil {
 		return nil, err
@@ -41,10 +71,16 @@ func New(width, height int, backend string, renderer *render.Renderer) (*API, er
 	if renderer == nil {
 		return nil, errors.New("renderer is required")
 	}
-	return &API{
+	api := &API{
 		width: width, height: height, frameSize: frameSize,
-		backend: backend, renderer: renderer,
-	}, nil
+		backend: backend, renderer: renderer, startedAt: time.Now(),
+	}
+	for _, option := range options {
+		if err := option(api); err != nil {
+			return nil, err
+		}
+	}
+	return api, nil
 }
 
 func (a *API) Handler() http.Handler {
@@ -52,6 +88,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", a.health)
 	mux.HandleFunc("GET /v1/info", a.info)
 	mux.HandleFunc("PUT /v1/frame", a.putFrame)
+	mux.HandleFunc("POST /v1/display-info", a.displayInfo)
 	return mux
 }
 
@@ -61,15 +98,45 @@ func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *API) info(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, Info{
+	writeJSON(w, http.StatusOK, a.currentInfo())
+}
+
+func (a *API) currentInfo() Info {
+	return Info{
 		ProtocolVersion: ProtocolVersion,
 		Width:           a.width,
 		Height:          a.height,
 		PixelFormat:     frame.PixelFormat,
 		FrameBytes:      a.frameSize,
 		Backend:         a.backend,
+		BaseURLs:        append([]string(nil), a.baseURLs...),
+		StartedAt:       a.startedAt,
+		UptimeSeconds:   int64(time.Since(a.startedAt).Seconds()),
 		Stats:           a.renderer.Stats(),
-	})
+	}
+}
+
+// ShowTechnicalInfo queues the temporary information screen and restores the
+// newest client frame after the configured duration.
+func (a *API) ShowTechnicalInfo() error {
+	if a.technicalFrame == nil {
+		return errors.New("technical information display is disabled")
+	}
+	next, err := a.technicalFrame(a.currentInfo())
+	if err != nil {
+		return fmt.Errorf("render technical information: %w", err)
+	}
+	return a.renderer.ShowTemporary(next, a.technicalDuration)
+}
+
+func (a *API) displayInfo(w http.ResponseWriter, _ *http.Request) {
+	if err := a.ShowTechnicalInfo(); err != nil {
+		writeProblem(w, http.StatusServiceUnavailable, "technical information unavailable", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, struct {
+		DurationSeconds int64 `json:"duration_seconds"`
+	}{DurationSeconds: int64(a.technicalDuration.Seconds())})
 }
 
 func (a *API) putFrame(w http.ResponseWriter, r *http.Request) {

@@ -6,16 +6,20 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"syscall"
 	"time"
 
 	appconfig "github.com/Djoulzy/GoLedMatrix2/internal/config"
 	"github.com/Djoulzy/GoLedMatrix2/internal/display"
+	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
 	"github.com/Djoulzy/GoLedMatrix2/internal/server"
+	"github.com/Djoulzy/GoLedMatrix2/internal/technical"
 )
 
 type options struct {
@@ -71,6 +75,7 @@ func parseFlags() (options, error) {
 	httpAddr := flag.String("http-addr", defaults.HTTP.Addr, `HTTP host/IP or "detect"`)
 	httpPort := flag.Int("http-port", defaults.HTTP.Port, "HTTP port")
 	httpEnabled := flag.Bool("http-enabled", defaults.HTTP.Enabled, "enable the HTTP server")
+	infoDisplaySeconds := flag.Int("info-display-seconds", defaults.HTTP.InfoDisplaySeconds, "seconds to show technical information; 0 disables it")
 	flag.Parse()
 
 	settings := defaults
@@ -124,6 +129,8 @@ func parseFlags() (options, error) {
 			settings.HTTP.Port = *httpPort
 		case "http-enabled":
 			settings.HTTP.Enabled = *httpEnabled
+		case "info-display-seconds":
+			settings.HTTP.InfoDisplaySeconds = *infoDisplaySeconds
 		}
 	})
 	if err := settings.Validate(); err != nil {
@@ -184,16 +191,37 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 		return nil
 	}
 
-	api, err := server.New(width, height, backendName, renderer)
-	if err != nil {
-		return err
-	}
 	listen := cfg.listen
+	var err error
 	if listen == "" {
 		listen, err = cfg.config.HTTP.ListenAddress()
 		if err != nil {
 			return err
 		}
+	}
+	baseURLs := advertisedBaseURLs(listen)
+	apiOptions := make([]server.Option, 0, 1)
+	if seconds := cfg.config.HTTP.InfoDisplaySeconds; seconds > 0 {
+		apiOptions = append(apiOptions, server.WithTechnicalDisplay(
+			baseURLs,
+			time.Duration(seconds)*time.Second,
+			func(info server.Info) (frame.Frame, error) {
+				baseURL := ""
+				if len(info.BaseURLs) > 0 {
+					baseURL = info.BaseURLs[0]
+				}
+				return technical.Render(technical.State{
+					Backend: info.Backend, BaseURL: baseURL,
+					Width: info.Width, Height: info.Height,
+					Uptime:   time.Duration(info.UptimeSeconds) * time.Second,
+					Protocol: info.ProtocolVersion,
+				})
+			},
+		))
+	}
+	api, err := server.New(width, height, backendName, renderer, apiOptions...)
+	if err != nil {
+		return err
 	}
 	httpServer := &http.Server{
 		Addr:              listen,
@@ -203,11 +231,20 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	listener, err := net.Listen("tcp", listen)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", listen, err)
+	}
 	errs := make(chan error, 1)
 	go func() {
 		slog.Info("matrix server listening", "address", listen, "backend", backendName, "width", width, "height", height)
-		errs <- httpServer.ListenAndServe()
+		errs <- httpServer.Serve(listener)
 	}()
+	if cfg.config.HTTP.InfoDisplaySeconds > 0 {
+		if err := api.ShowTechnicalInfo(); err != nil {
+			slog.Warn("unable to display startup technical information", "error", err)
+		}
+	}
 
 	select {
 	case <-ctx.Done():
@@ -220,6 +257,41 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 		}
 		return err
 	}
+}
+
+func advertisedBaseURLs(listen string) []string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return nil
+	}
+	if host != "" && net.ParseIP(host) == nil {
+		return []string{"http://" + net.JoinHostPort(host, port)}
+	}
+	if parsed := net.ParseIP(host); parsed != nil && !parsed.IsUnspecified() {
+		return []string{"http://" + net.JoinHostPort(host, port)}
+	}
+
+	var ipv4, ipv6 []string
+	addresses, _ := net.InterfaceAddrs()
+	for _, address := range addresses {
+		ip, _, err := net.ParseCIDR(address.String())
+		if err != nil || !ip.IsGlobalUnicast() || ip.IsLoopback() {
+			continue
+		}
+		url := "http://" + net.JoinHostPort(ip.String(), port)
+		if ip.To4() != nil {
+			ipv4 = append(ipv4, url)
+		} else {
+			ipv6 = append(ipv6, url)
+		}
+	}
+	sort.Strings(ipv4)
+	sort.Strings(ipv6)
+	result := append(ipv4, ipv6...)
+	if len(result) == 0 {
+		result = []string{"http://" + net.JoinHostPort("127.0.0.1", port)}
+	}
+	return result
 }
 
 func openDisplay(cfg options) (display.Display, string, error) {

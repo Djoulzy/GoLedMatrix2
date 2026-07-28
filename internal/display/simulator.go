@@ -77,20 +77,33 @@ func RunSimulator(
 		defer closeWindow()
 
 		runDone := make(chan error, 1)
-		go func() {
-			runDone <- run(simulator, windowClosed)
-		}()
+		var startRunOnce sync.Once
+		runStarted := false
+		// Starting the server can immediately present the technical frame.
+		// Wait for the first size event so Shiny has initialized its internal
+		// framebuffer dimensions before any OpenGL drawing is attempted.
+		startRun := func() {
+			startRunOnce.Do(func() {
+				runStarted = true
+				go func() {
+					runDone <- run(simulator, windowClosed)
+				}()
+			})
+		}
 		go func() {
 			window.Send(simulationStopped{err: <-runDone})
 		}()
 
-		currentSize := windowSize
+		currentSize := image.Point{}
 		for {
 			event := window.NextEvent()
 			switch event := event.(type) {
 			case lifecycle.Event:
 				if event.To == lifecycle.StageDead {
 					closeWindow()
+					if !runStarted {
+						return
+					}
 				}
 			case key.Event:
 				if event.Code == key.CodeEscape && event.Direction == key.DirPress {
@@ -98,9 +111,10 @@ func RunSimulator(
 				}
 			case size.Event:
 				currentSize = event.Size()
+				startRun()
 				window.Send(paint.Event{})
 			case paint.Event:
-				if !simulator.closed.Load() {
+				if !simulator.closed.Load() && currentSize.X > 0 && currentSize.Y > 0 {
 					simulator.paint(currentSize)
 				}
 			case simulationStopped:

@@ -21,6 +21,8 @@ Fondations disponibles :
 - backend matériel Linux/Raspberry Pi isolé derrière les build tags
   `linux,cgo,rpi` ;
 - backend mémoire portable pour macOS, Linux, le développement et les tests ;
+- simulateur graphique représentant chaque pixel de la matrice logique ;
+- écran technique temporaire au démarrage, rendu avec une police TTF embarquée ;
 - configuration TOML stricte du matériel, du runtime GPIO et du serveur HTTP ;
 - arrêt propre, limites de taille, timeouts HTTP et tests avec race detector ;
 - dépendances Go et bibliothèque C++ épinglées.
@@ -28,7 +30,6 @@ Fondations disponibles :
 À venir :
 
 - authentification et TLS pour une exposition hors réseau local ;
-- aperçu graphique du backend de développement ;
 - bibliothèque de composition et ordonnanceur d’animations côté client ;
 - métriques et mesures de débit/latence sur le matériel cible ;
 - paquet Debian et procédure de désinstallation.
@@ -69,9 +70,15 @@ Décrit le contrat attendu par le serveur :
   "pixel_format": "rgb24",
   "frame_bytes": 6144,
   "backend": "memory",
+  "base_urls": ["http://192.168.0.18:8080"],
+  "started_at": "2026-07-28T10:00:00Z",
+  "uptime_seconds": 42,
   "stats": {"accepted": 0, "rendered": 0, "failed": 0}
 }
 ```
+
+`base_urls` fournit au client les adresses détectées ou configurées pour joindre
+le serveur.
 
 ### `PUT /v1/frame`
 
@@ -84,6 +91,21 @@ Décrit le contrat attendu par le serveur :
 `202` signifie que la trame a été validée et mise en attente. Elle peut être
 remplacée par une trame plus récente avant le rendu si le producteur dépasse la
 capacité du matériel. Ce choix évite d’accumuler une animation déjà périmée.
+
+### `POST /v1/display-info`
+
+Demande au serveur de réafficher temporairement ses informations techniques sur
+la matrice. La réponse est `202 Accepted`. Pendant cet écran, les nouvelles
+trames client restent acceptées ; la plus récente est affichée automatiquement
+à la fin.
+
+Commande équivalente avec le client :
+
+```bash
+go run ./cmd/ledmatrix-client \
+  -server http://192.168.0.18:8080 \
+  -show-info
+```
 
 Les erreurs utilisent `application/problem+json`. La version 1 n’inclut ni
 compression, ni redimensionnement, ni delta entre images : ces opérations
@@ -131,6 +153,7 @@ DoGpioInit              = true
 Addr                    = "detect"
 Port                    = 8080
 Enabled                 = true
+InfoDisplaySeconds      = 5
 ```
 
 Les valeurs sont appliquées dans cet ordre :
@@ -147,6 +170,12 @@ Les clés absentes conservent leur valeur par défaut.
 un nom d’hôte peut être donné pour restreindre l’écoute. `Enabled = false`
 initialise le backend puis désactive l’API HTTP ; le processus attend uniquement
 un signal d’arrêt.
+
+`InfoDisplaySeconds` définit pendant combien de secondes l’écran technique est
+affiché au démarrage et à chaque appel de `POST /v1/display-info`. Une valeur de
+`0` désactive cet écran. La police
+`assets/ttf/fixed/Pixel_ModeX.otf` est embarquée dans le binaire : aucun fichier
+de police supplémentaire n’est nécessaire sur le Raspberry Pi.
 
 `Daemon`, `DropPrivileges` et `DoGpioInit` sont conservés dans le format afin de
 rester compatibles avec le fichier initial, mais ne sont pas transmis au
@@ -185,8 +214,20 @@ go run ./cmd/ledmatrix-server \
 
 Le backend `simulation` n'effectue aucune initialisation GPIO ni aucune
 communication avec la dalle. L’API HTTP reste identique et `/v1/info` annonce
-le backend `simulation`. Le simulateur calcule
-d'abord la géométrie physique avec `Cols × ChainLength` et
+le backend `simulation`.
+
+La fenêtre graphique est entièrement initialisée avant le démarrage du serveur
+HTTP et avant le premier rendu. Cette synchronisation est nécessaire sur macOS
+et évite qu’un écran technique envoyé immédiatement soit dessiné sur une
+surface OpenGL encore à `0 × 0`.
+
+Au démarrage, le simulateur affiche le même écran technique que la dalle
+physique pendant `InfoDisplaySeconds`. La grille de pixels reste visible et
+l’écran revient ensuite à la dernière trame reçue, ou à une trame noire si
+aucun client n’a encore envoyé d’image. Une trame reçue pendant l’écran
+technique est conservée puis affichée automatiquement.
+
+Le simulateur calcule d'abord la géométrie physique avec `Cols × ChainLength` et
 `Rows × Parallel`, puis applique dans l'ordre les transformations de
 `PixelMapperConfig`. Par exemple, `64 × 32`, `ChainLength = 4`,
 `Parallel = 2` et `V-mapper` donnent une surface logique de `128 × 128`.
@@ -201,13 +242,18 @@ go run ./cmd/ledmatrix-server \
   -config server.toml
 ```
 
-Le mode graphique nécessite une session de bureau active. Sous Linux, les
-dépendances X11/OpenGL indiquées dans la procédure Raspberry Pi sont également
-requises. Les mappers `V-mapper`, `U-mapper`, `StackToRow`, `Rotate` et
-`Mirror` sont pris en charge pour le calcul de la géométrie simulée, y compris
-lorsqu'ils sont chaînés avec `;`. Un mapper non pris en charge provoque une
-erreur explicite au démarrage afin d'éviter d'afficher une géométrie fausse.
-Fermer la fenêtre ou appuyer sur `Échap` arrête proprement le serveur.
+Le mode graphique nécessite une session de bureau active. Sous Linux, installer
+les dépendances graphiques avant de compiler le simulateur :
+
+```bash
+sudo apt install -y libx11-dev libegl1-mesa-dev libgles2-mesa-dev
+```
+
+Les mappers `V-mapper`, `U-mapper`, `StackToRow`, `Rotate` et `Mirror` sont pris
+en charge pour le calcul de la géométrie simulée, y compris lorsqu'ils sont
+chaînés avec `;`. Un mapper non pris en charge provoque une erreur explicite au
+démarrage afin d'éviter d'afficher une géométrie fausse. Fermer la fenêtre ou
+appuyer sur `Échap` arrête proprement le serveur.
 
 Envoyer une couleur ou une image aux dimensions exactes :
 
@@ -218,6 +264,28 @@ go run ./cmd/ledmatrix-client -server http://localhost:8080 -image frame.png
 
 Les PNG et JPEG sont décodés côté client. Aucun redimensionnement implicite
 n’est effectué afin d’éviter les erreurs silencieuses de cadrage.
+
+### Diagnostic du simulateur
+
+Si la fenêtre apparaît mais reste noire :
+
+1. vérifier que le journal contient `backend=simulation` et la géométrie
+   attendue ;
+2. consulter le contrat détecté avec
+   `curl http://localhost:8080/v1/info` ;
+3. envoyer une couleur de contrôle avec la commande ci-dessus ;
+4. demander à nouveau l’écran technique avec :
+
+```bash
+go run ./cmd/ledmatrix-client \
+  -server http://localhost:8080 \
+  -show-info
+```
+
+Une fenêtre noire sans grille dès son ouverture indiquait auparavant que le
+premier rendu avait précédé l’initialisation OpenGL. Le serveur attend désormais
+le premier événement de dimensionnement de la fenêtre avant de démarrer ; ce
+cas est donc corrigé.
 
 ## Build et exécution sur Raspberry Pi
 

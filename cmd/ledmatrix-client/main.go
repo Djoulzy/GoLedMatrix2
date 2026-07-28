@@ -22,17 +22,35 @@ func main() {
 	serverURL := flag.String("server", "http://localhost:8080", "matrix server URL")
 	imagePath := flag.String("image", "", "PNG or JPEG image with the matrix dimensions")
 	solid := flag.String("color", "", "solid color in #RRGGBB form")
+	showInfo := flag.Bool("show-info", false, "temporarily display server connection information")
 	timeout := flag.Duration("timeout", 5*time.Second, "HTTP request timeout")
 	flag.Parse()
 
-	if (*imagePath == "") == (*solid == "") {
-		log.Fatal("provide exactly one of -image or -color")
+	selectedActions := 0
+	if *imagePath != "" {
+		selectedActions++
+	}
+	if *solid != "" {
+		selectedActions++
+	}
+	if *showInfo {
+		selectedActions++
+	}
+	if selectedActions != 1 {
+		log.Fatal("provide exactly one of -image, -color, or -show-info")
 	}
 	api, err := client.New(*serverURL, *timeout)
 	if err != nil {
 		log.Fatal(err)
 	}
 	ctx := context.Background()
+	if *showInfo {
+		if err := api.DisplayInfo(ctx); err != nil {
+			log.Fatalf("display server information: %v", err)
+		}
+		fmt.Println("server information display requested")
+		return
+	}
 	info, err := api.Info(ctx)
 	if err != nil {
 		log.Fatalf("query server: %v", err)

@@ -79,6 +79,22 @@ func (c *Client) Send(ctx context.Context, next frame.Frame) (uint64, error) {
 	return accepted.Sequence, nil
 }
 
+func (c *Client) DisplayInfo(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("/v1/display-info"), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		return responseError(resp)
+	}
+	return nil
+}
+
 func (c *Client) endpoint(path string) string {
 	copyOfURL := *c.baseURL
 	copyOfURL.Path += path

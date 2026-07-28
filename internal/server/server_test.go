@@ -99,3 +99,38 @@ func TestPutFrameRejectsWrongSizeAndType(t *testing.T) {
 		})
 	}
 }
+
+func TestDisplayInfo(t *testing.T) {
+	memory, err := display.NewMemory(2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderer := render.New(memory)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go renderer.Run(ctx)
+	technicalFrame, _ := frame.New(2, 1, []byte{9, 0, 0, 9, 0, 0})
+	api, err := New(2, 1, "memory", renderer, WithTechnicalDisplay(
+		[]string{"http://matrix.local:8080"},
+		20*time.Millisecond,
+		func(Info) (frame.Frame, error) { return technicalFrame, nil },
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/display-info", nil)
+	response := httptest.NewRecorder()
+	api.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for len(memory.Latest().Pixels) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := memory.Latest().Pixels; len(got) == 0 || got[0] != 9 {
+		t.Fatalf("technical frame pixels = %v", got)
+	}
+}

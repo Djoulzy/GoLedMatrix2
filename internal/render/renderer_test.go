@@ -43,10 +43,57 @@ func TestRendererKeepsNewestPendingFrame(t *testing.T) {
 	}
 }
 
+func TestTemporaryFrameRestoresNewestClientFrame(t *testing.T) {
+	target := &recordingDisplay{presented: make(chan byte, 4)}
+	renderer := New(target)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go renderer.Run(ctx)
+
+	renderer.Submit(onePixel(1))
+	expectPresented(t, target.presented, 1)
+	if err := renderer.ShowTemporary(onePixel(9), 20*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	expectPresented(t, target.presented, 9)
+	renderer.Submit(onePixel(2))
+	expectPresented(t, target.presented, 2)
+
+	stats := renderer.Stats()
+	if stats.Accepted != 2 || stats.Rendered != 2 {
+		t.Fatalf("unexpected stats after restoration: %+v", stats)
+	}
+}
+
+func expectPresented(t *testing.T, presented <-chan byte, want byte) {
+	t.Helper()
+	select {
+	case got := <-presented:
+		if got != want {
+			t.Fatalf("presented value = %d, want %d", got, want)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("value %d was not presented", want)
+	}
+}
+
 func onePixel(value byte) frame.Frame {
 	next, _ := frame.New(1, 1, []byte{value, 0, 0})
 	return next
 }
+
+type recordingDisplay struct {
+	presented chan byte
+}
+
+func (d *recordingDisplay) Geometry() (int, int) { return 1, 1 }
+
+func (d *recordingDisplay) Present(_ context.Context, next frame.Frame) error {
+	d.presented <- next.Pixels[0]
+	return nil
+}
+
+func (d *recordingDisplay) Close() error { return nil }
 
 type blockingDisplay struct {
 	started chan struct{}

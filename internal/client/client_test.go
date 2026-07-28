@@ -43,6 +43,24 @@ func TestInfoAndSend(t *testing.T) {
 	}
 }
 
+func TestDisplayInfo(t *testing.T) {
+	var method, path string
+	client, err := New("http://matrix.test", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.http.Transport = handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		method, path = request.Method, request.URL.Path
+		w.WriteHeader(http.StatusAccepted)
+	})}
+	if err := client.DisplayInfo(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if method != http.MethodPost || path != "/v1/display-info" {
+		t.Fatalf("request = %s %s", method, path)
+	}
+}
+
 type handlerTransport struct {
 	handler http.Handler
 }

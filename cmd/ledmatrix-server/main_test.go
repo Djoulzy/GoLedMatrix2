@@ -34,6 +34,14 @@ func TestRPIConfigMapsSupportedFileSettings(t *testing.T) {
 	}
 }
 
+func TestAdvertisedBaseURLsUsesConfiguredAddress(t *testing.T) {
+	got := advertisedBaseURLs("192.168.0.18:8080")
+	want := []string{"http://192.168.0.18:8080"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("advertised URLs = %v, want %v", got, want)
+	}
+}
+
 func TestSimulationGeometryUsesHardwareConfiguration(t *testing.T) {
 	settings := appconfig.Default()
 	settings.Hardware.Rows = 32

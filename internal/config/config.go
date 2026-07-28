@@ -44,9 +44,10 @@ type RuntimeOptions struct {
 }
 
 type HTTPServer struct {
-	Addr    string `toml:"Addr"`
-	Port    int    `toml:"Port"`
-	Enabled bool   `toml:"Enabled"`
+	Addr               string `toml:"Addr"`
+	Port               int    `toml:"Port"`
+	Enabled            bool   `toml:"Enabled"`
+	InfoDisplaySeconds int    `toml:"InfoDisplaySeconds"`
 }
 
 func Default() Config {
@@ -59,7 +60,7 @@ func Default() Config {
 		Runtime: RuntimeOptions{
 			GPIOSlowdown: 1, Daemon: 0, DropPrivileges: -1, DoGPIOInit: true,
 		},
-		HTTP: HTTPServer{Addr: "detect", Port: 8080, Enabled: true},
+		HTTP: HTTPServer{Addr: "detect", Port: 8080, Enabled: true, InfoDisplaySeconds: 5},
 	}
 }
 
@@ -120,6 +121,9 @@ func (c Config) Validate() error {
 
 	if c.HTTP.Port < 1 || c.HTTP.Port > 65535 {
 		return errors.New("HTTPserver.Port must be between 1 and 65535")
+	}
+	if c.HTTP.InfoDisplaySeconds < 0 || c.HTTP.InfoDisplaySeconds > 60 {
+		return errors.New("HTTPserver.InfoDisplaySeconds must be between 0 and 60")
 	}
 	if _, err := c.HTTP.ListenAddress(); err != nil {
 		return err

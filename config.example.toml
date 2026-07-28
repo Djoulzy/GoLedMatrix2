@@ -27,3 +27,4 @@ DoGpioInit              = true
 Addr                    = "detect"
 Port                    = 8080
 Enabled                 = true
+InfoDisplaySeconds      = 5
