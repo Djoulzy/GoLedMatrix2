@@ -165,6 +165,10 @@ make test
 make build
 ```
 
+`make build` génère `bin/ledmatrix-server` et `bin/ledmatrix-client`. Il est
+également possible de ne compiler qu'un exécutable avec `make build-server` ou
+`make build-client`.
+
 Démarrer un serveur sans dalle :
 
 ```bash
@@ -175,13 +179,13 @@ Pour afficher la matrice dans une fenêtre graphique :
 
 ```bash
 go run ./cmd/ledmatrix-server \
-  -simulate \
+  -backend simulation \
   -config server.toml
 ```
 
-`-simulate` est prioritaire sur `-backend` : aucune initialisation GPIO et
-aucune communication avec la dalle ne sont effectuées. L’API HTTP reste
-identique et `/v1/info` annonce le backend `simulation`. Le simulateur calcule
+Le backend `simulation` n'effectue aucune initialisation GPIO ni aucune
+communication avec la dalle. L’API HTTP reste identique et `/v1/info` annonce
+le backend `simulation`. Le simulateur calcule
 d'abord la géométrie physique avec `Cols × ChainLength` et
 `Rows × Parallel`, puis applique dans l'ordre les transformations de
 `PixelMapperConfig`. Par exemple, `64 × 32`, `ChainLength = 4`,
@@ -192,7 +196,7 @@ matrices :
 
 ```bash
 go run ./cmd/ledmatrix-server \
-  -simulate \
+  -backend simulation \
   -simulation-pixel-pitch 4 \
   -config server.toml
 ```

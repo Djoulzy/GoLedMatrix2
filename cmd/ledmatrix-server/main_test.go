@@ -42,8 +42,8 @@ func TestSimulationGeometryUsesHardwareConfiguration(t *testing.T) {
 	settings.Hardware.Parallel = 2
 	settings.Hardware.PixelMapperConfig = "V-mapper"
 	cfg := options{
-		backend: "rpi", config: settings,
-		simulate: true, simulationPixelPitch: 8,
+		backend: "simulation", config: settings,
+		simulationPixelPitch: 8,
 	}
 	width, height, pitch, err := simulationGeometry(cfg)
 	if err != nil {

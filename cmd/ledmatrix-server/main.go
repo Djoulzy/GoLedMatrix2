@@ -23,7 +23,6 @@ type options struct {
 	listen               string
 	config               appconfig.Config
 	check                bool
-	simulate             bool
 	simulationPixelPitch int
 }
 
@@ -34,11 +33,7 @@ func main() {
 		return
 	}
 	if err == nil {
-		if cfg.simulate {
-			err = runSimulation(cfg)
-		} else {
-			err = run(cfg)
-		}
+		err = run(cfg)
 	}
 	if err != nil {
 		slog.Error("server stopped", "error", err)
@@ -50,8 +45,7 @@ func parseFlags() (options, error) {
 	defaults := appconfig.Default()
 	configPath := flag.String("config", "", "TOML configuration file")
 	checkConfig := flag.Bool("check-config", false, "validate configuration and exit")
-	backend := flag.String("backend", "memory", "display backend: memory or rpi")
-	simulate := flag.Bool("simulate", false, "display the matrix in a graphical window instead of using GPIO")
+	backend := flag.String("backend", "memory", "display backend: memory, simulation, or rpi")
 	simulationPixelPitch := flag.Int("simulation-pixel-pitch", 6, "simulated LED size in screen pixels (minimum 2)")
 	listen := flag.String("listen", "", "override HTTP listen address (for example :8080)")
 
@@ -137,11 +131,14 @@ func parseFlags() (options, error) {
 	}
 	return options{
 		backend: *backend, listen: *listen, config: settings, check: *checkConfig,
-		simulate: *simulate, simulationPixelPitch: *simulationPixelPitch,
+		simulationPixelPitch: *simulationPixelPitch,
 	}, nil
 }
 
 func run(cfg options) error {
+	if cfg.backend == "simulation" {
+		return runSimulation(cfg)
+	}
 	target, backendName, err := openDisplay(cfg)
 	if err != nil {
 		return err
@@ -237,7 +234,7 @@ func openDisplay(cfg options) (display.Display, string, error) {
 		target, err := display.NewRPI(rpiConfig(hardware, cfg.config.Runtime))
 		return target, "rpi", err
 	default:
-		return nil, "", fmt.Errorf("unknown backend %q (want memory or rpi)", cfg.backend)
+		return nil, "", fmt.Errorf("unknown backend %q (want memory, simulation, or rpi)", cfg.backend)
 	}
 }
 
