@@ -1,0 +1,19 @@
+[Unit]
+Description=GoLedMatrix2 RGB LED matrix server
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/goledmatrix2/ledmatrix-server -backend rpi -config /etc/goledmatrix2/server.toml
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+
+# Direct GPIO access and real-time scheduling used by rpi-rgb-led-matrix
+# require root privileges.
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

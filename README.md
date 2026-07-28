@@ -31,7 +31,7 @@ Fondations disponibles :
 - aperçu graphique du backend de développement ;
 - bibliothèque de composition et ordonnanceur d’animations côté client ;
 - métriques et mesures de débit/latence sur le matériel cible ;
-- paquet/service `systemd` et procédure d’installation automatisée.
+- paquet Debian et procédure de désinstallation.
 
 ## Architecture
 
@@ -229,7 +229,7 @@ Sur Raspberry Pi OS/Debian :
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential git libx11-dev libgl1-mesa-dev
+sudo apt install -y build-essential git
 git clone --recurse-submodules https://github.com/Djoulzy/GoLedMatrix2.git
 cd GoLedMatrix2
 cp config.example.toml server.toml
@@ -263,6 +263,133 @@ Options utiles du serveur :
 
 Le binaire matériel doit être construit sur Linux avec CGO. Le build standard,
 sans `-tags rpi`, reste portable et ne lie aucune bibliothèque GPIO.
+
+## Déploiement sur un Raspberry Pi du réseau local
+
+Le déploiement automatisé compile le serveur directement sur le Raspberry Pi,
+puis installe le binaire, la configuration et un service `systemd`. Compiler
+sur la cible évite les problèmes de cross-compilation CGO et garantit que la
+bibliothèque C++ correspond bien à l'architecture du Pi.
+
+### 1. Préparer le Raspberry Pi une seule fois
+
+Activer SSH dans `raspi-config`, puis installer les outils nécessaires :
+
+```bash
+sudo apt update
+sudo apt install -y build-essential git rsync curl golang-go
+go version
+```
+
+Go 1.22 ou supérieur est requis. Si la version fournie par Raspberry Pi OS est
+plus ancienne, installer une version récente de Go avant de continuer.
+Le build matériel exclut le simulateur graphique : aucune bibliothèque
+X11/OpenGL n'est nécessaire sur le Raspberry Pi sans écran.
+
+Le script recherche les commandes distantes dans
+`/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin`. Cela couvre notamment une
+installation officielle de Go dans `/usr/local/go`. Pour une installation dans
+un autre répertoire, préciser le chemin :
+
+```bash
+make deploy-rpi \
+  RPI_HOST=pi@raspberrypi.local \
+  RPI_CONFIG=server.toml \
+  RPI_REMOTE_PATH=/chemin/vers/go/bin:/usr/local/bin:/usr/bin:/bin
+```
+
+En cas de prérequis absent, le script affiche désormais le nom exact de chaque
+commande manquante.
+
+Depuis le poste de développement, vérifier la connexion et, de préférence,
+installer une clé SSH :
+
+```bash
+ssh pi@raspberrypi.local
+ssh-copy-id pi@raspberrypi.local
+```
+
+Le compte peut être différent de `pi`. Il doit disposer de `sudo`. Une
+réservation DHCP pour le Raspberry Pi est recommandée afin que son adresse ne
+change pas.
+
+### 2. Préparer et valider la configuration
+
+```bash
+cp config.example.toml server.toml
+go run ./cmd/ledmatrix-server -config server.toml -check-config
+```
+
+Adapter au minimum `Rows`, `Cols`, `ChainLength`, `Parallel`,
+`PixelMapperConfig` et les réglages GPIO à la dalle.
+
+### 3. Déployer ou mettre à jour
+
+```bash
+make deploy-rpi \
+  RPI_HOST=pi@raspberrypi.local \
+  RPI_CONFIG=server.toml
+```
+
+Pour un port SSH différent :
+
+```bash
+make deploy-rpi \
+  RPI_HOST=pi@192.168.1.42 \
+  RPI_SSH_PORT=2222 \
+  RPI_CONFIG=server.toml
+```
+
+La commande :
+
+1. copie les sources et le sous-module dans un répertoire temporaire du Pi ;
+2. compile `rpi-rgb-led-matrix` et le serveur avec CGO ;
+3. valide le fichier TOML ;
+4. installe le binaire dans `/opt/goledmatrix2/` ;
+5. installe la configuration dans `/etc/goledmatrix2/server.toml` ;
+6. active et redémarre `goledmatrix.service` ;
+7. vérifie `/healthz` depuis le Pi.
+
+`sudo` peut demander le mot de passe du compte distant pendant l'installation.
+Les déploiements suivants utilisent exactement la même commande. Le premier
+build télécharge les modules Go et nécessite donc un accès sortant à Internet
+depuis le Pi ; aucun accès entrant depuis Internet n'est nécessaire.
+
+La vérification utilise par défaut
+`http://127.0.0.1:8080/healthz`. Si le port HTTP configuré est différent,
+préciser l'URL correspondante. Si HTTP est désactivé, passer une valeur vide :
+
+```bash
+make deploy-rpi RPI_HOST=pi@raspberrypi.local \
+  RPI_CONFIG=server.toml \
+  RPI_HEALTH_URL=http://127.0.0.1:9090/healthz
+
+make deploy-rpi RPI_HOST=pi@raspberrypi.local \
+  RPI_CONFIG=server.toml \
+  RPI_HEALTH_URL=
+```
+
+Commandes de diagnostic sur le Raspberry Pi :
+
+```bash
+sudo systemctl status goledmatrix
+sudo journalctl -u goledmatrix -f
+curl http://127.0.0.1:8080/v1/info
+```
+
+Depuis le poste client, l'API est accessible avec :
+
+```bash
+curl http://raspberrypi.local:8080/v1/info
+go run ./cmd/ledmatrix-client \
+  -server http://raspberrypi.local:8080 \
+  -color '#2040ff'
+```
+
+Le service écoute selon `HTTPserver.Addr`. Avec `Addr = "detect"`, il écoute sur
+toutes les interfaces du Raspberry Pi. Pour conserver l'accès au réseau local
+uniquement, ne pas configurer de redirection du port 8080 sur le routeur. Si le
+Pi dispose d'un pare-feu, autoriser uniquement le sous-réseau local utilisé.
 
 ## Choix de performance
 

@@ -1,3 +1,5 @@
+//go:build !rpi
+
 package display
 
 import (
