@@ -29,4 +29,6 @@ Port                    = 8080
 Enabled                 = true
 
 [Clock]
-DefaultMode             = "simple"
+DefaultMode             = "round"
+Color1                  = ""
+Color2                  = ""

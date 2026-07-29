@@ -24,6 +24,8 @@ func main() {
 	solid := flag.String("color", "", "solid color in #RRGGBB form")
 	showInfo := flag.Bool("show-info", false, "temporarily display server connection information")
 	showClock := flag.String("clock", "", "clock display mode: simple, fancy, or round")
+	clockColor1 := flag.String("clock-color1", "", "clock primary color in #RRGGBB form")
+	clockColor2 := flag.String("clock-color2", "", "clock secondary color in #RRGGBB form")
 	timeout := flag.Duration("timeout", 5*time.Second, "HTTP request timeout")
 	flag.Parse()
 
@@ -43,6 +45,9 @@ func main() {
 	if selectedActions != 1 {
 		log.Fatal("provide exactly one of -image, -color, -show-info, or -clock")
 	}
+	if *showClock == "" && (*clockColor1 != "" || *clockColor2 != "") {
+		log.Fatal("-clock-color1 and -clock-color2 require -clock")
+	}
 	api, err := client.New(*serverURL, *timeout)
 	if err != nil {
 		log.Fatal(err)
@@ -56,7 +61,7 @@ func main() {
 		return
 	}
 	if *showClock != "" {
-		if err := api.DisplayClock(ctx, *showClock); err != nil {
+		if err := api.DisplayClock(ctx, *showClock, *clockColor1, *clockColor2); err != nil {
 			log.Fatalf("display clock: %v", err)
 		}
 		fmt.Printf("%s clock display requested\n", *showClock)

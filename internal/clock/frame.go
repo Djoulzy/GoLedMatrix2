@@ -4,8 +4,10 @@ package clock
 import (
 	"fmt"
 	"image"
+	"image/color"
 	"math"
 	"math/rand"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +26,11 @@ const (
 	Fancy  Mode = "fancy"
 	Round  Mode = "round"
 )
+
+type Palette struct {
+	Color1 color.RGBA
+	Color2 color.RGBA
+}
 
 type fontResource struct {
 	name   string
@@ -49,9 +56,31 @@ func ParseMode(value string) (Mode, error) {
 	}
 }
 
+func ResolvePalette(mode Mode, color1, color2 string) (Palette, error) {
+	defaults := defaultPalette(mode)
+	var err error
+	if strings.TrimSpace(color1) != "" {
+		defaults.Color1, err = parseColor(color1)
+		if err != nil {
+			return Palette{}, fmt.Errorf("color1: %w", err)
+		}
+	}
+	if strings.TrimSpace(color2) != "" {
+		defaults.Color2, err = parseColor(color2)
+		if err != nil {
+			return Palette{}, fmt.Errorf("color2: %w", err)
+		}
+	}
+	return defaults, nil
+}
+
+func FormatColor(value color.RGBA) string {
+	return fmt.Sprintf("#%02X%02X%02X", value.R, value.G, value.B)
+}
+
 // Render creates an antialiased clock frame with the original TTF fonts and gg
 // drawing primitives.
-func Render(now time.Time, width, height int, mode Mode) (frame.Frame, error) {
+func Render(now time.Time, width, height int, mode Mode, palette Palette) (frame.Frame, error) {
 	if _, err := frame.ByteLen(width, height); err != nil {
 		return frame.Frame{}, err
 	}
@@ -60,11 +89,11 @@ func Render(now time.Time, width, height int, mode Mode) (frame.Frame, error) {
 	var err error
 	switch mode {
 	case Simple:
-		err = renderSimple(canvas, now)
+		err = renderSimple(canvas, now, palette)
 	case Fancy:
-		err = renderFancy(canvas, now)
+		err = renderFancy(canvas, now, palette)
 	case Round:
-		err = renderRound(canvas, now)
+		err = renderRound(canvas, now, palette)
 	default:
 		_, err = ParseMode(string(mode))
 	}
@@ -76,7 +105,7 @@ func Render(now time.Time, width, height int, mode Mode) (frame.Frame, error) {
 
 // renderSimple reproduces the former SimpleTime implementation with the
 // Perform font and a moving HH:MM:SS value.
-func renderSimple(canvas *image.RGBA, now time.Time) error {
+func renderSimple(canvas *image.RGBA, now time.Time, palette Palette) error {
 	const fontSize = 12.0
 	face, err := newFontFace(&simpleTimeFont, fontSize)
 	if err != nil {
@@ -88,20 +117,29 @@ func renderSimple(canvas *image.RGBA, now time.Time) error {
 	ctx.SetFontFace(face)
 	ctx.SetHexColor("#000000")
 	ctx.Clear()
-	ctx.SetHexColor("#FFFFFF")
 
 	random := rand.New(rand.NewSource(now.Unix()))
 	maxX := min(55, max(1, canvas.Bounds().Dx()-1))
 	maxY := min(100, max(1, canvas.Bounds().Dy()-1))
 	x := random.Intn(maxX) + 1
 	y := random.Intn(maxY) + 1
-	ctx.DrawString(now.Format("15:04:05"), float64(x), float64(y))
+	if palette.Color1 == palette.Color2 {
+		ctx.SetColor(palette.Color1)
+		ctx.DrawString(now.Format("15:04:05"), float64(x), float64(y))
+		return nil
+	}
+	timeText := now.Format("15:04")
+	ctx.SetColor(palette.Color1)
+	ctx.DrawString(timeText, float64(x), float64(y))
+	timeWidth, _ := ctx.MeasureString(timeText)
+	ctx.SetColor(palette.Color2)
+	ctx.DrawString(now.Format(":05"), float64(x)+timeWidth, float64(y))
 	return nil
 }
 
 // renderFancy reproduces the former FancyClock implementation with the
 // HappyBomb font, original colors and vertical positioning.
-func renderFancy(canvas *image.RGBA, now time.Time) error {
+func renderFancy(canvas *image.RGBA, now time.Time, palette Palette) error {
 	const fontSize = 55.0
 	face, err := newFontFace(&fancyClockFont, fontSize)
 	if err != nil {
@@ -121,9 +159,9 @@ func renderFancy(canvas *image.RGBA, now time.Time) error {
 	timeMinuteWidth, _ := ctx.MeasureString(timeMinute)
 	timeMinuteHeight := fontSize * 72 / 96
 
-	ctx.SetHexColor("#FF8337")
+	ctx.SetColor(palette.Color1)
 	ctx.DrawString(timeHour, float64(center.X)-timeHourWidth/2, float64(center.Y))
-	ctx.SetHexColor("#7be0de")
+	ctx.SetColor(palette.Color2)
 	ctx.DrawString(
 		timeMinute,
 		float64(center.X)-timeMinuteWidth/2,
@@ -134,7 +172,7 @@ func renderFancy(canvas *image.RGBA, now time.Time) error {
 
 // renderRound reproduces the former OfficeRound implementation with the same
 // font, point size, colors, radii and gg drawing primitives.
-func renderRound(canvas *image.RGBA, now time.Time) error {
+func renderRound(canvas *image.RGBA, now time.Time, palette Palette) error {
 	width, height := canvas.Bounds().Dx(), canvas.Bounds().Dy()
 	face, err := newFontFace(&officeRoundFont, 38)
 	if err != nil {
@@ -164,7 +202,7 @@ func renderRound(canvas *image.RGBA, now time.Time) error {
 	ctx.SetHexColor("#000000")
 	ctx.Clear()
 
-	ctx.SetHexColor("#FFFFFF")
+	ctx.SetColor(palette.Color2)
 	for angle := 0.0; angle <= twoPi; angle += div12 {
 		x := float64(center.X) + r1*math.Cos(angle)
 		y := float64(center.Y) + r1*math.Sin(angle)
@@ -172,7 +210,7 @@ func renderRound(canvas *image.RGBA, now time.Time) error {
 	}
 	ctx.Stroke()
 
-	ctx.SetHexColor("#FF0000")
+	ctx.SetColor(palette.Color1)
 	timeString := now.Format("15:04")
 	second := 0
 	for angle := 0.0; angle <= twoPi; angle += div60 {
@@ -187,13 +225,19 @@ func renderRound(canvas *image.RGBA, now time.Time) error {
 	ctx.Stroke()
 
 	timeWidth, _ := ctx.MeasureString(timeString)
+	hourText := timeString[:2]
+	minuteText := timeString[3:]
+	hourWidth, _ := ctx.MeasureString(hourText)
+	prefixWidth, _ := ctx.MeasureString(timeString[:3])
 	const fontSize = 38.0
 	timeHeight := fontSize * 72 / 96
-	ctx.DrawString(
-		timeString,
-		float64(center.X)-timeWidth/2,
-		float64(center.Y)+timeHeight/2,
-	)
+	timeX := float64(center.X) - timeWidth/2
+	timeY := float64(center.Y) + timeHeight/2
+	ctx.DrawString(hourText, timeX, timeY)
+	if now.Second()%2 == 0 {
+		ctx.DrawString(":", timeX+hourWidth, timeY)
+	}
+	ctx.DrawString(minuteText, timeX+prefixWidth, timeY)
 	return nil
 }
 
@@ -211,4 +255,41 @@ func closeFace(face font.Face) {
 	if closer, ok := face.(interface{ Close() error }); ok {
 		_ = closer.Close()
 	}
+}
+
+func defaultPalette(mode Mode) Palette {
+	switch mode {
+	case Fancy:
+		return Palette{
+			Color1: color.RGBA{R: 255, G: 131, B: 55, A: 255},
+			Color2: color.RGBA{R: 123, G: 224, B: 222, A: 255},
+		}
+	case Round:
+		return Palette{
+			Color1: color.RGBA{R: 255, A: 255},
+			Color2: color.RGBA{R: 255, G: 255, B: 255, A: 255},
+		}
+	default:
+		return Palette{
+			Color1: color.RGBA{R: 255, G: 255, B: 255, A: 255},
+			Color2: color.RGBA{R: 255, G: 255, B: 255, A: 255},
+		}
+	}
+}
+
+func parseColor(value string) (color.RGBA, error) {
+	raw := strings.TrimPrefix(strings.TrimSpace(value), "#")
+	if len(raw) != 6 {
+		return color.RGBA{}, fmt.Errorf("%q must use #RRGGBB", value)
+	}
+	packed, err := strconv.ParseUint(raw, 16, 24)
+	if err != nil {
+		return color.RGBA{}, fmt.Errorf("%q must use #RRGGBB", value)
+	}
+	return color.RGBA{
+		R: byte(packed >> 16),
+		G: byte(packed >> 8),
+		B: byte(packed),
+		A: 255,
+	}, nil
 }

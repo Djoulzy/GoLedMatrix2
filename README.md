@@ -111,11 +111,12 @@ go run ./cmd/ledmatrix-client \
   -show-info
 ```
 
-### `POST /v1/clock?mode={simple|fancy|round}`
+### `POST /v1/clock?mode={simple|fancy|round}&color1={hex}&color2={hex}`
 
 Sélectionne la variante, réactive l’horloge du serveur et abandonne la dernière
-trame client. La réponse est `202 Accepted` avec `{"mode":"round"}`. Les trois
-variantes sont :
+trame client. `color1` et `color2`, au format `#RRGGBB`, sont facultatives et
+remplacent les couleurs configurées. La réponse est `202 Accepted` avec le mode
+et les couleurs réellement appliqués. Les trois variantes sont :
 
 - `simple` : heure `HH:MM:SS` mobile avec la police `Perform` ;
 - `fancy` : heures et minutes superposées avec la police `HappyBomb` et les
@@ -131,7 +132,9 @@ Commande équivalente avec le client :
 ```bash
 go run ./cmd/ledmatrix-client \
   -server http://192.168.0.18:8080 \
-  -clock round
+  -clock round \
+  -clock-color1 '#ff0000' \
+  -clock-color2 '#ffffff'
 ```
 
 Les erreurs utilisent `application/problem+json`. La version 1 n’inclut ni
@@ -184,6 +187,8 @@ InfoDisplaySeconds      = 5
 
 [Clock]
 DefaultMode             = "simple"
+Color1                  = ""
+Color2                  = ""
 ```
 
 Les valeurs sont appliquées dans cet ordre :
@@ -198,7 +203,12 @@ Les clés absentes conservent leur valeur par défaut.
 
 `Clock.DefaultMode` choisit l’horloge affichée au démarrage parmi `simple`,
 `fancy` et `round`. L’option serveur `-clock-mode` permet de la remplacer
-ponctuellement.
+ponctuellement. `Clock.Color1` et `Clock.Color2` acceptent des couleurs
+`#RRGGBB`. Une valeur vide conserve les couleurs d’origine du mode :
+
+- `simple` : blanc et blanc (`HH:MM`, puis secondes) ;
+- `fancy` : orange et cyan (heures, puis minutes) ;
+- `round` : rouge et blanc (heure/progression, puis cadran).
 
 `Addr = "detect"` écoute sur toutes les interfaces (`:Port`). Une adresse IP ou
 un nom d’hôte peut être donné pour restreindre l’écoute. `Enabled = false`
@@ -294,7 +304,8 @@ Envoyer une couleur ou une image aux dimensions exactes :
 ```bash
 go run ./cmd/ledmatrix-client -server http://localhost:8080 -color '#2040ff'
 go run ./cmd/ledmatrix-client -server http://localhost:8080 -image frame.png
-go run ./cmd/ledmatrix-client -server http://localhost:8080 -clock fancy
+go run ./cmd/ledmatrix-client -server http://localhost:8080 \
+  -clock fancy -clock-color1 '#ff8337' -clock-color2 '#7be0de'
 ```
 
 Les PNG et JPEG sont décodés côté client. Aucun redimensionnement implicite

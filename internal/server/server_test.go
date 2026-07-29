@@ -151,17 +151,23 @@ func TestDisplayClock(t *testing.T) {
 	renderer.Submit(frame.Frame{Width: 2, Height: 1, Pixels: []byte{1, 0, 0, 1, 0, 0}})
 
 	api, err := New(2, 1, "memory", renderer, WithClockDisplay(
-		func(mode string) (string, error) {
+		func(selection ClockSelection) (ClockState, error) {
 			if err := renderer.ActivateDefault(); err != nil {
-				return "", err
+				return ClockState{}, err
 			}
-			return mode, nil
+			return ClockState{
+				Mode: selection.Mode, Color1: selection.Color1, Color2: selection.Color2,
+			}, nil
 		},
 	))
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodPost, "/v1/clock?mode=round", nil)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/clock?mode=round&color1=%23112233&color2=%23AABBCC",
+		nil,
+	)
 	response := httptest.NewRecorder()
 	api.Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusAccepted {

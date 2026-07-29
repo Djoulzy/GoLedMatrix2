@@ -54,6 +54,8 @@ type HTTPServer struct {
 
 type ClockConfig struct {
 	DefaultMode string `toml:"DefaultMode"`
+	Color1      string `toml:"Color1"`
+	Color2      string `toml:"Color2"`
 }
 
 func Default() Config {
@@ -135,8 +137,12 @@ func (c Config) Validate() error {
 	if _, err := c.HTTP.ListenAddress(); err != nil {
 		return err
 	}
-	if _, err := matrixclock.ParseMode(c.Clock.DefaultMode); err != nil {
+	mode, err := matrixclock.ParseMode(c.Clock.DefaultMode)
+	if err != nil {
 		return fmt.Errorf("Clock.DefaultMode: %w", err)
+	}
+	if _, err := matrixclock.ResolvePalette(mode, c.Clock.Color1, c.Clock.Color2); err != nil {
+		return fmt.Errorf("Clock: %w", err)
 	}
 	return nil
 }

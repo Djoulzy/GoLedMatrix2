@@ -95,8 +95,15 @@ func (c *Client) DisplayInfo(ctx context.Context) error {
 	return nil
 }
 
-func (c *Client) DisplayClock(ctx context.Context, mode string) error {
-	endpoint := c.endpoint("/v1/clock") + "?mode=" + url.QueryEscape(mode)
+func (c *Client) DisplayClock(ctx context.Context, mode, color1, color2 string) error {
+	query := url.Values{"mode": []string{mode}}
+	if color1 != "" {
+		query.Set("color1", color1)
+	}
+	if color2 != "" {
+		query.Set("color2", color2)
+	}
+	endpoint := c.endpoint("/v1/clock") + "?" + query.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
 		return err

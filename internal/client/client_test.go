@@ -71,10 +71,10 @@ func TestDisplayClock(t *testing.T) {
 		method, path = request.Method, request.URL.RequestURI()
 		w.WriteHeader(http.StatusAccepted)
 	})}
-	if err := client.DisplayClock(context.Background(), "round"); err != nil {
+	if err := client.DisplayClock(context.Background(), "round", "#112233", "#AABBCC"); err != nil {
 		t.Fatal(err)
 	}
-	if method != http.MethodPost || path != "/v1/clock?mode=round" {
+	if method != http.MethodPost || path != "/v1/clock?color1=%23112233&color2=%23AABBCC&mode=round" {
 		t.Fatalf("request = %s %s", method, path)
 	}
 }

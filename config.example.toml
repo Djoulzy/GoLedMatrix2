@@ -32,3 +32,6 @@ InfoDisplaySeconds      = 5
 [Clock]
 # Valeurs possibles : "simple", "fancy" ou "round".
 DefaultMode             = "simple"
+# Laisser vide pour utiliser les couleurs propres au mode.
+Color1                  = ""
+Color2                  = ""

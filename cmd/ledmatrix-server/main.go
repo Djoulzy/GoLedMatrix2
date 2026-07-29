@@ -188,7 +188,13 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 	width, height := target.Geometry()
 	renderer := render.New(target)
 	clockController, err := startClock(
-		ctx, renderer, width, height, cfg.config.Clock.DefaultMode,
+		ctx,
+		renderer,
+		width,
+		height,
+		cfg.config.Clock.DefaultMode,
+		cfg.config.Clock.Color1,
+		cfg.config.Clock.Color2,
 	)
 	if err != nil {
 		return err
@@ -277,6 +283,8 @@ type clockController struct {
 	renderer *render.Renderer
 	width    int
 	height   int
+	color1   string
+	color2   string
 }
 
 func startClock(
@@ -284,6 +292,7 @@ func startClock(
 	renderer *render.Renderer,
 	width, height int,
 	defaultMode string,
+	color1, color2 string,
 ) (*clockController, error) {
 	mode, err := matrixclock.ParseMode(defaultMode)
 	if err != nil {
@@ -291,6 +300,7 @@ func startClock(
 	}
 	controller := &clockController{
 		mode: mode, renderer: renderer, width: width, height: height,
+		color1: color1, color2: color2,
 	}
 	if err := controller.update(time.Now()); err != nil {
 		return nil, fmt.Errorf("initialize clock: %w", err)
@@ -323,37 +333,57 @@ func startClock(
 func (c *clockController) update(now time.Time) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	next, err := matrixclock.Render(now, c.width, c.height, c.mode)
+	palette, err := matrixclock.ResolvePalette(c.mode, c.color1, c.color2)
+	if err != nil {
+		return err
+	}
+	next, err := matrixclock.Render(now, c.width, c.height, c.mode, palette)
 	if err != nil {
 		return err
 	}
 	return c.renderer.SetDefault(next)
 }
 
-func (c *clockController) Activate(value string) (string, error) {
+func (c *clockController) Activate(selection server.ClockSelection) (server.ClockState, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	mode := c.mode
 	var err error
-	if value != "" {
-		mode, err = matrixclock.ParseMode(value)
+	if selection.Mode != "" {
+		mode, err = matrixclock.ParseMode(selection.Mode)
 		if err != nil {
-			return "", err
+			return server.ClockState{}, err
 		}
 	}
-	next, err := matrixclock.Render(time.Now(), c.width, c.height, mode)
+	color1, color2 := c.color1, c.color2
+	if selection.Color1 != "" {
+		color1 = selection.Color1
+	}
+	if selection.Color2 != "" {
+		color2 = selection.Color2
+	}
+	palette, err := matrixclock.ResolvePalette(mode, color1, color2)
 	if err != nil {
-		return "", err
+		return server.ClockState{}, err
+	}
+	next, err := matrixclock.Render(time.Now(), c.width, c.height, mode, palette)
+	if err != nil {
+		return server.ClockState{}, err
 	}
 	if err := c.renderer.SetDefault(next); err != nil {
-		return "", err
+		return server.ClockState{}, err
 	}
 	if err := c.renderer.ActivateDefault(); err != nil {
-		return "", err
+		return server.ClockState{}, err
 	}
 	c.mode = mode
-	return string(mode), nil
+	c.color1, c.color2 = color1, color2
+	return server.ClockState{
+		Mode:   string(mode),
+		Color1: matrixclock.FormatColor(palette.Color1),
+		Color2: matrixclock.FormatColor(palette.Color2),
+	}, nil
 }
 
 func advertisedBaseURLs(listen string) []string {

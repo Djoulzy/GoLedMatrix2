@@ -8,6 +8,7 @@ import (
 	appconfig "github.com/Djoulzy/GoLedMatrix2/internal/config"
 	"github.com/Djoulzy/GoLedMatrix2/internal/display"
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
+	"github.com/Djoulzy/GoLedMatrix2/internal/server"
 )
 
 func TestRPIConfigMapsSupportedFileSettings(t *testing.T) {
@@ -71,18 +72,20 @@ func TestClockControllerSwitchesMode(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	controller, err := startClock(ctx, render.New(target), 128, 128, "fancy")
+	controller, err := startClock(ctx, render.New(target), 128, 128, "fancy", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	mode, err := controller.Activate("round")
+	state, err := controller.Activate(server.ClockSelection{
+		Mode: "round", Color1: "#112233", Color2: "#AABBCC",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mode != "round" {
-		t.Fatalf("active mode = %q, want round", mode)
+	if state.Mode != "round" || state.Color1 != "#112233" || state.Color2 != "#AABBCC" {
+		t.Fatalf("active clock = %+v", state)
 	}
-	if _, err := controller.Activate("unknown"); err == nil {
+	if _, err := controller.Activate(server.ClockSelection{Mode: "unknown"}); err == nil {
 		t.Fatal("expected invalid clock mode error")
 	}
 }

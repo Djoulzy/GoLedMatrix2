@@ -27,7 +27,7 @@ type API struct {
 
 	technicalFrame    func(Info) (frame.Frame, error)
 	technicalDuration time.Duration
-	clockDisplay      func(string) (string, error)
+	clockDisplay      func(ClockSelection) (ClockState, error)
 }
 
 type Info struct {
@@ -44,6 +44,18 @@ type Info struct {
 }
 
 type Option func(*API) error
+
+type ClockSelection struct {
+	Mode   string
+	Color1 string
+	Color2 string
+}
+
+type ClockState struct {
+	Mode   string `json:"mode"`
+	Color1 string `json:"color1"`
+	Color2 string `json:"color2"`
+}
 
 func WithTechnicalDisplay(
 	baseURLs []string,
@@ -64,7 +76,7 @@ func WithTechnicalDisplay(
 	}
 }
 
-func WithClockDisplay(display func(string) (string, error)) Option {
+func WithClockDisplay(display func(ClockSelection) (ClockState, error)) Option {
 	return func(api *API) error {
 		if display == nil {
 			return errors.New("clock display controller is required")
@@ -156,18 +168,20 @@ func (a *API) displayClock(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusServiceUnavailable, "clock unavailable", "clock display is disabled")
 		return
 	}
-	mode, err := a.clockDisplay(r.URL.Query().Get("mode"))
+	state, err := a.clockDisplay(ClockSelection{
+		Mode:   r.URL.Query().Get("mode"),
+		Color1: r.URL.Query().Get("color1"),
+		Color2: r.URL.Query().Get("color2"),
+	})
 	if err != nil {
-		writeProblem(w, http.StatusBadRequest, "invalid clock mode", err.Error())
+		writeProblem(w, http.StatusBadRequest, "invalid clock parameters", err.Error())
 		return
 	}
-	if mode == "" {
+	if state.Mode == "" {
 		writeProblem(w, http.StatusServiceUnavailable, "clock unavailable", "clock controller returned no active mode")
 		return
 	}
-	writeJSON(w, http.StatusAccepted, struct {
-		Mode string `json:"mode"`
-	}{Mode: mode})
+	writeJSON(w, http.StatusAccepted, state)
 }
 
 func (a *API) putFrame(w http.ResponseWriter, r *http.Request) {
