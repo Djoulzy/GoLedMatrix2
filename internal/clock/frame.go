@@ -4,15 +4,17 @@ package clock
 import (
 	"fmt"
 	"image"
-	"image/color"
 	"math"
+	"math/rand"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/Djoulzy/GoLedMatrix2/assets"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
-	"github.com/hajimehoshi/bitmapfont"
+	"github.com/fogleman/gg"
+	"github.com/golang/freetype/truetype"
 	"golang.org/x/image/font"
-	"golang.org/x/image/math/fixed"
 )
 
 type Mode string
@@ -23,11 +25,18 @@ const (
 	Round  Mode = "round"
 )
 
+type fontResource struct {
+	name   string
+	data   []byte
+	once   sync.Once
+	parsed *truetype.Font
+	err    error
+}
+
 var (
-	hourColor      = color.RGBA{R: 255, G: 131, B: 55, A: 255}
-	minuteColor    = color.RGBA{R: 123, G: 224, B: 222, A: 255}
-	separatorColor = color.RGBA{R: 220, G: 220, B: 220, A: 255}
-	pendingColor   = color.RGBA{R: 20, G: 48, B: 48, A: 255}
+	simpleTimeFont  = fontResource{name: "SimpleTime", data: assets.SimpleTimeFont}
+	fancyClockFont  = fontResource{name: "FancyClock", data: assets.FancyClockFont}
+	officeRoundFont = fontResource{name: "OfficeRound", data: assets.OfficeRoundFont}
 )
 
 func ParseMode(value string) (Mode, error) {
@@ -40,8 +49,8 @@ func ParseMode(value string) (Mode, error) {
 	}
 }
 
-// Render creates a pixel-perfect clock frame. Glyphs are enlarged only by an
-// integer factor and every drawing primitive stays aligned to logical pixels.
+// Render creates an antialiased clock frame with the original TTF fonts and gg
+// drawing primitives.
 func Render(now time.Time, width, height int, mode Mode) (frame.Frame, error) {
 	if _, err := frame.ByteLen(width, height); err != nil {
 		return frame.Frame{}, err
@@ -65,187 +74,141 @@ func Render(now time.Time, width, height int, mode Mode) (frame.Frame, error) {
 	return frame.FromImage(canvas)
 }
 
-// renderSimple replaces the former SimpleTime mode with a stable centered
-// HH:MM display, a blinking separator and a seconds progress bar.
+// renderSimple reproduces the former SimpleTime implementation with the
+// Perform font and a moving HH:MM:SS value.
 func renderSimple(canvas *image.RGBA, now time.Time) error {
-	text := now.Format("15:04")
-	source := bitmapText(text, func(index int) color.Color {
-		switch {
-		case index < 2:
-			return hourColor
-		case index == 2 && now.Second()%2 == 0:
-			return separatorColor
-		case index == 2:
-			return color.RGBA{A: 255}
-		default:
-			return minuteColor
-		}
-	})
-
-	const horizontalMargin = 2
-	const progressHeight = 3
-	scale := min(
-		(canvas.Bounds().Dx()-horizontalMargin)/source.Bounds().Dx(),
-		(canvas.Bounds().Dy()-progressHeight)/source.Bounds().Dy(),
-	)
-	if scale < 1 {
-		return matrixTooSmall(canvas)
+	const fontSize = 12.0
+	face, err := newFontFace(&simpleTimeFont, fontSize)
+	if err != nil {
+		return err
 	}
-	scaledWidth, scaledHeight := source.Bounds().Dx()*scale, source.Bounds().Dy()*scale
-	offsetX := (canvas.Bounds().Dx() - scaledWidth) / 2
-	offsetY := (canvas.Bounds().Dy() - progressHeight - scaledHeight) / 2
-	drawScaled(canvas, source, offsetX, offsetY, scale)
-	drawSecondsBar(canvas, now.Second())
+	defer closeFace(face)
+
+	ctx := gg.NewContextForRGBA(canvas)
+	ctx.SetFontFace(face)
+	ctx.SetHexColor("#000000")
+	ctx.Clear()
+	ctx.SetHexColor("#FFFFFF")
+
+	random := rand.New(rand.NewSource(now.Unix()))
+	maxX := min(55, max(1, canvas.Bounds().Dx()-1))
+	maxY := min(100, max(1, canvas.Bounds().Dy()-1))
+	x := random.Intn(maxX) + 1
+	y := random.Intn(maxY) + 1
+	ctx.DrawString(now.Format("15:04:05"), float64(x), float64(y))
 	return nil
 }
 
-// renderFancy follows the former FancyClock layout with the hour and minute on
-// two independently colored rows.
+// renderFancy reproduces the former FancyClock implementation with the
+// HappyBomb font, original colors and vertical positioning.
 func renderFancy(canvas *image.RGBA, now time.Time) error {
-	hour := bitmapText(now.Format("15"), func(int) color.Color { return hourColor })
-	minute := bitmapText(now.Format("04"), func(int) color.Color { return minuteColor })
-	sourceWidth := max(hour.Bounds().Dx(), minute.Bounds().Dx())
-	sourceHeight := hour.Bounds().Dy() + 1 + minute.Bounds().Dy()
-	scale := min(
-		(canvas.Bounds().Dx()-2)/sourceWidth,
-		(canvas.Bounds().Dy()-2)/sourceHeight,
-	)
-	if scale < 1 {
-		return matrixTooSmall(canvas)
+	const fontSize = 55.0
+	face, err := newFontFace(&fancyClockFont, fontSize)
+	if err != nil {
+		return err
 	}
+	defer closeFace(face)
 
-	totalHeight := sourceHeight * scale
-	offsetY := (canvas.Bounds().Dy() - totalHeight) / 2
-	drawScaled(canvas, hour, (canvas.Bounds().Dx()-hour.Bounds().Dx()*scale)/2, offsetY, scale)
-	separatorY := offsetY + hour.Bounds().Dy()*scale
-	separatorSize := max(1, scale)
-	separatorX := (canvas.Bounds().Dx() - separatorSize) / 2
-	fillRect(canvas, separatorX, separatorY, separatorSize, separatorSize, separatorColor)
-	drawScaled(
-		canvas,
-		minute,
-		(canvas.Bounds().Dx()-minute.Bounds().Dx()*scale)/2,
-		separatorY+scale,
-		scale,
+	ctx := gg.NewContextForRGBA(canvas)
+	ctx.SetFontFace(face)
+	center := image.Point{X: canvas.Bounds().Dx() / 2, Y: canvas.Bounds().Dy() / 2}
+	ctx.SetHexColor("#000000")
+	ctx.Clear()
+
+	timeHour := now.Format("15")
+	timeMinute := now.Format("04")
+	timeHourWidth, _ := ctx.MeasureString(timeHour)
+	timeMinuteWidth, _ := ctx.MeasureString(timeMinute)
+	timeMinuteHeight := fontSize * 72 / 96
+
+	ctx.SetHexColor("#FF8337")
+	ctx.DrawString(timeHour, float64(center.X)-timeHourWidth/2, float64(center.Y))
+	ctx.SetHexColor("#7be0de")
+	ctx.DrawString(
+		timeMinute,
+		float64(center.X)-timeMinuteWidth/2,
+		float64(center.Y)+20+timeMinuteHeight,
 	)
 	return nil
 }
 
-// renderRound follows the former OfficeRound mode: twelve dial markers, a
-// sixty-step seconds ring and a centered HH:MM value.
+// renderRound reproduces the former OfficeRound implementation with the same
+// font, point size, colors, radii and gg drawing primitives.
 func renderRound(canvas *image.RGBA, now time.Time) error {
 	width, height := canvas.Bounds().Dx(), canvas.Bounds().Dy()
-	radius := float64(min(width, height)-1)/2 - 1
-	if radius < 3 {
-		return matrixTooSmall(canvas)
+	face, err := newFontFace(&officeRoundFont, 38)
+	if err != nil {
+		return err
 	}
-	centerX := float64(width-1) / 2
-	centerY := float64(height-1) / 2
-	markerSize := 1
-	if min(width, height) >= 96 {
-		markerSize = 2
+	defer func() {
+		if closer, ok := face.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	}()
+
+	ctx := gg.NewContextForRGBA(canvas)
+	ctx.SetFontFace(face)
+	center := image.Point{X: width / 2, Y: height / 2}
+	twoPi := 2 * math.Pi
+	div12 := twoPi / 12
+	div60 := twoPi / 60
+	rotate := 90 * math.Pi / 180
+	r1 := float64(center.Y) - 8
+	r2 := float64(center.Y) - 2
+
+	dotSize := 0.7
+	if width > 64 {
+		dotSize = 1
 	}
 
-	secondsRadius := max(1.0, radius-3)
-	for second := 0; second < 60; second++ {
-		angle := float64(second)*2*math.Pi/60 - math.Pi/2
-		x := int(math.Round(centerX + secondsRadius*math.Cos(angle)))
-		y := int(math.Round(centerY + secondsRadius*math.Sin(angle)))
-		value := pendingColor
-		if second < now.Second() {
-			value = hourColor
-		}
-		drawPoint(canvas, x, y, 1, value)
-	}
-	for hour := 0; hour < 12; hour++ {
-		angle := float64(hour)*2*math.Pi/12 - math.Pi/2
-		x := int(math.Round(centerX + radius*math.Cos(angle)))
-		y := int(math.Round(centerY + radius*math.Sin(angle)))
-		drawPoint(canvas, x, y, markerSize, separatorColor)
-	}
+	ctx.SetHexColor("#000000")
+	ctx.Clear()
 
-	text := bitmapText(now.Format("15:04"), func(index int) color.Color {
-		if index < 2 {
-			return hourColor
+	ctx.SetHexColor("#FFFFFF")
+	for angle := 0.0; angle <= twoPi; angle += div12 {
+		x := float64(center.X) + r1*math.Cos(angle)
+		y := float64(center.Y) + r1*math.Sin(angle)
+		ctx.DrawPoint(x, y, dotSize)
+	}
+	ctx.Stroke()
+
+	ctx.SetHexColor("#FF0000")
+	timeString := now.Format("15:04")
+	second := 0
+	for angle := 0.0; angle <= twoPi; angle += div60 {
+		x := float64(center.X) + r2*math.Cos(angle-rotate)
+		y := float64(center.Y) + r2*math.Sin(angle-rotate)
+		ctx.DrawPoint(x, y, dotSize)
+		second++
+		if second > now.Second() {
+			break
 		}
-		if index == 2 {
-			return separatorColor
-		}
-		return minuteColor
-	})
-	maxTextWidth := min(width-2, max(text.Bounds().Dx(), int(radius*1.6)))
-	maxTextHeight := max(text.Bounds().Dy(), int(radius*.8))
-	scale := max(1, min(maxTextWidth/text.Bounds().Dx(), maxTextHeight/text.Bounds().Dy()))
-	drawScaled(
-		canvas,
-		text,
-		(width-text.Bounds().Dx()*scale)/2,
-		(height-text.Bounds().Dy()*scale)/2,
-		scale,
+	}
+	ctx.Stroke()
+
+	timeWidth, _ := ctx.MeasureString(timeString)
+	const fontSize = 38.0
+	timeHeight := fontSize * 72 / 96
+	ctx.DrawString(
+		timeString,
+		float64(center.X)-timeWidth/2,
+		float64(center.Y)+timeHeight/2,
 	)
 	return nil
 }
 
-func bitmapText(value string, colorAt func(int) color.Color) *image.RGBA {
-	face := bitmapfont.Gothic10r
-	bounds, _ := font.BoundString(face, value)
-	width := bounds.Max.X.Ceil() - bounds.Min.X.Floor()
-	height := bounds.Max.Y.Ceil() - bounds.Min.Y.Floor()
-	result := image.NewRGBA(image.Rect(0, 0, width, height))
-	drawer := &font.Drawer{
-		Dst:  result,
-		Face: face,
-		Dot: fixed.Point26_6{
-			X: -bounds.Min.X,
-			Y: -bounds.Min.Y,
-		},
+func newFontFace(resource *fontResource, size float64) (font.Face, error) {
+	resource.once.Do(func() {
+		resource.parsed, resource.err = truetype.Parse(resource.data)
+	})
+	if resource.err != nil {
+		return nil, fmt.Errorf("parse %s font: %w", resource.name, resource.err)
 	}
-	for index, character := range value {
-		drawer.Src = image.NewUniform(colorAt(index))
-		drawer.DrawString(string(character))
-	}
-	return result
+	return truetype.NewFace(resource.parsed, &truetype.Options{Size: size}), nil
 }
 
-func drawScaled(dst *image.RGBA, src *image.RGBA, offsetX, offsetY, scale int) {
-	for y := 0; y < src.Bounds().Dy(); y++ {
-		for x := 0; x < src.Bounds().Dx(); x++ {
-			value := src.RGBAAt(x, y)
-			if value.A == 0 {
-				continue
-			}
-			fillRect(dst, offsetX+x*scale, offsetY+y*scale, scale, scale, value)
-		}
+func closeFace(face font.Face) {
+	if closer, ok := face.(interface{ Close() error }); ok {
+		_ = closer.Close()
 	}
-}
-
-func drawSecondsBar(canvas *image.RGBA, second int) {
-	width := canvas.Bounds().Dx()
-	if width <= 2 {
-		return
-	}
-	y := canvas.Bounds().Dy() - 2
-	for x := 1; x < width-1; x++ {
-		value := pendingColor
-		if (x-1)*60 < second*(width-2) {
-			value = hourColor
-		}
-		canvas.SetRGBA(x, y, value)
-	}
-}
-
-func drawPoint(canvas *image.RGBA, centerX, centerY, size int, value color.RGBA) {
-	fillRect(canvas, centerX-size/2, centerY-size/2, size, size, value)
-}
-
-func fillRect(canvas *image.RGBA, x, y, width, height int, value color.RGBA) {
-	for offsetY := 0; offsetY < height; offsetY++ {
-		for offsetX := 0; offsetX < width; offsetX++ {
-			canvas.SetRGBA(x+offsetX, y+offsetY, value)
-		}
-	}
-}
-
-func matrixTooSmall(canvas *image.RGBA) error {
-	return fmt.Errorf("matrix %dx%d is too small for clock", canvas.Bounds().Dx(), canvas.Bounds().Dy())
 }

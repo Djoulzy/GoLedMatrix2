@@ -23,7 +23,7 @@ Fondations disponibles :
 - backend mémoire portable pour macOS, Linux, le développement et les tests ;
 - simulateur graphique représentant chaque pixel de la matrice logique ;
 - écran technique temporaire au démarrage, rendu avec une police bitmap ;
-- trois horloges bitmap (`simple`, `fancy`, `round`) sélectionnables côté
+- trois horloges (`simple`, `fancy`, `round`) sélectionnables côté
   serveur ou client et affichées par défaut lorsqu’aucune trame client n’est
   active ;
 - configuration TOML stricte du matériel, du runtime GPIO et du serveur HTTP ;
@@ -117,14 +117,14 @@ Sélectionne la variante, réactive l’horloge du serveur et abandonne la derni
 trame client. La réponse est `202 Accepted` avec `{"mode":"round"}`. Les trois
 variantes sont :
 
-- `simple` : affichage horizontal `HH:MM`, séparateur clignotant et barre des
-  secondes ;
-- `fancy` : heures et minutes superposées avec deux couleurs ;
-- `round` : cadran à douze repères, progression circulaire des secondes et
-  heure centrée.
+- `simple` : heure `HH:MM:SS` mobile avec la police `Perform` ;
+- `fancy` : heures et minutes superposées avec la police `HappyBomb` et les
+  couleurs orange et cyan d’origine ;
+- `round` : reproduction d’`OfficeRound` avec la police `TickingTimebomb`,
+  cadran blanc, progression circulaire rouge des secondes et heure centrée.
 
-Tous les glyphes sont bitmap et leur agrandissement utilise uniquement un
-facteur entier.
+Les trois modes utilisent le rendu TTF anticrénelé de `gg`, conformément aux
+visuels d’origine. Le rendu pixel-perfect reste réservé à l’écran technique.
 
 Commande équivalente avec le client :
 
