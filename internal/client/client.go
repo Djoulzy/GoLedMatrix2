@@ -95,6 +95,23 @@ func (c *Client) DisplayInfo(ctx context.Context) error {
 	return nil
 }
 
+func (c *Client) DisplayClock(ctx context.Context, mode string) error {
+	endpoint := c.endpoint("/v1/clock") + "?mode=" + url.QueryEscape(mode)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		return responseError(resp)
+	}
+	return nil
+}
+
 func (c *Client) endpoint(path string) string {
 	copyOfURL := *c.baseURL
 	copyOfURL.Path += path

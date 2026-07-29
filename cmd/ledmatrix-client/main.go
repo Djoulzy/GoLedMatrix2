@@ -23,6 +23,7 @@ func main() {
 	imagePath := flag.String("image", "", "PNG or JPEG image with the matrix dimensions")
 	solid := flag.String("color", "", "solid color in #RRGGBB form")
 	showInfo := flag.Bool("show-info", false, "temporarily display server connection information")
+	showClock := flag.String("clock", "", "clock display mode: simple, fancy, or round")
 	timeout := flag.Duration("timeout", 5*time.Second, "HTTP request timeout")
 	flag.Parse()
 
@@ -36,8 +37,11 @@ func main() {
 	if *showInfo {
 		selectedActions++
 	}
+	if *showClock != "" {
+		selectedActions++
+	}
 	if selectedActions != 1 {
-		log.Fatal("provide exactly one of -image, -color, or -show-info")
+		log.Fatal("provide exactly one of -image, -color, -show-info, or -clock")
 	}
 	api, err := client.New(*serverURL, *timeout)
 	if err != nil {
@@ -49,6 +53,13 @@ func main() {
 			log.Fatalf("display server information: %v", err)
 		}
 		fmt.Println("server information display requested")
+		return
+	}
+	if *showClock != "" {
+		if err := api.DisplayClock(ctx, *showClock); err != nil {
+			log.Fatalf("display clock: %v", err)
+		}
+		fmt.Printf("%s clock display requested\n", *showClock)
 		return
 	}
 	info, err := api.Info(ctx)

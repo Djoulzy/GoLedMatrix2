@@ -50,13 +50,31 @@ func TestDisplayInfo(t *testing.T) {
 		t.Fatal(err)
 	}
 	client.http.Transport = handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		method, path = request.Method, request.URL.Path
+		method, path = request.Method, request.URL.RequestURI()
 		w.WriteHeader(http.StatusAccepted)
 	})}
 	if err := client.DisplayInfo(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if method != http.MethodPost || path != "/v1/display-info" {
+		t.Fatalf("request = %s %s", method, path)
+	}
+}
+
+func TestDisplayClock(t *testing.T) {
+	var method, path string
+	client, err := New("http://matrix.test", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.http.Transport = handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		method, path = request.Method, request.URL.RequestURI()
+		w.WriteHeader(http.StatusAccepted)
+	})}
+	if err := client.DisplayClock(context.Background(), "round"); err != nil {
+		t.Fatal(err)
+	}
+	if method != http.MethodPost || path != "/v1/clock?mode=round" {
 		t.Fatalf("request = %s %s", method, path)
 	}
 }

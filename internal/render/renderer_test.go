@@ -65,6 +65,53 @@ func TestTemporaryFrameRestoresNewestClientFrame(t *testing.T) {
 	}
 }
 
+func TestDefaultFrameStopsForClientAndCanBeReactivated(t *testing.T) {
+	target := &recordingDisplay{presented: make(chan byte, 4)}
+	renderer := New(target)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go renderer.Run(ctx)
+
+	if err := renderer.SetDefault(onePixel(7)); err != nil {
+		t.Fatal(err)
+	}
+	expectPresented(t, target.presented, 7)
+
+	renderer.Submit(onePixel(1))
+	expectPresented(t, target.presented, 1)
+	if err := renderer.SetDefault(onePixel(8)); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-target.presented:
+		t.Fatalf("inactive default frame was presented: %d", got)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err := renderer.ActivateDefault(); err != nil {
+		t.Fatal(err)
+	}
+	expectPresented(t, target.presented, 8)
+}
+
+func TestTemporaryFrameRestoresDefault(t *testing.T) {
+	target := &recordingDisplay{presented: make(chan byte, 4)}
+	renderer := New(target)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go renderer.Run(ctx)
+
+	if err := renderer.SetDefault(onePixel(7)); err != nil {
+		t.Fatal(err)
+	}
+	expectPresented(t, target.presented, 7)
+	if err := renderer.ShowTemporary(onePixel(9), 20*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	expectPresented(t, target.presented, 9)
+	expectPresented(t, target.presented, 7)
+}
+
 func expectPresented(t *testing.T, presented <-chan byte, want byte) {
 	t.Helper()
 	select {

@@ -11,9 +11,11 @@ import (
 	"os"
 	"os/signal"
 	"sort"
+	"sync"
 	"syscall"
 	"time"
 
+	matrixclock "github.com/Djoulzy/GoLedMatrix2/internal/clock"
 	appconfig "github.com/Djoulzy/GoLedMatrix2/internal/config"
 	"github.com/Djoulzy/GoLedMatrix2/internal/display"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
@@ -76,6 +78,7 @@ func parseFlags() (options, error) {
 	httpPort := flag.Int("http-port", defaults.HTTP.Port, "HTTP port")
 	httpEnabled := flag.Bool("http-enabled", defaults.HTTP.Enabled, "enable the HTTP server")
 	infoDisplaySeconds := flag.Int("info-display-seconds", defaults.HTTP.InfoDisplaySeconds, "seconds to show technical information; 0 disables it")
+	clockMode := flag.String("clock-mode", defaults.Clock.DefaultMode, "default clock mode: simple, fancy, or round")
 	flag.Parse()
 
 	settings := defaults
@@ -131,6 +134,8 @@ func parseFlags() (options, error) {
 			settings.HTTP.Enabled = *httpEnabled
 		case "info-display-seconds":
 			settings.HTTP.InfoDisplaySeconds = *infoDisplaySeconds
+		case "clock-mode":
+			settings.Clock.DefaultMode = *clockMode
 		}
 	})
 	if err := settings.Validate(); err != nil {
@@ -182,9 +187,15 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 
 	width, height := target.Geometry()
 	renderer := render.New(target)
-	go renderer.Run(ctx)
+	clockController, err := startClock(
+		ctx, renderer, width, height, cfg.config.Clock.DefaultMode,
+	)
+	if err != nil {
+		return err
+	}
 
 	if !cfg.config.HTTP.Enabled {
+		go renderer.Run(ctx)
 		slog.Info("HTTP server disabled; matrix process waiting for shutdown",
 			"backend", backendName, "width", width, "height", height)
 		<-ctx.Done()
@@ -192,7 +203,6 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 	}
 
 	listen := cfg.listen
-	var err error
 	if listen == "" {
 		listen, err = cfg.config.HTTP.ListenAddress()
 		if err != nil {
@@ -200,7 +210,8 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 		}
 	}
 	baseURLs := advertisedBaseURLs(listen)
-	apiOptions := make([]server.Option, 0, 1)
+	apiOptions := make([]server.Option, 0, 2)
+	apiOptions = append(apiOptions, server.WithClockDisplay(clockController.Activate))
 	if seconds := cfg.config.HTTP.InfoDisplaySeconds; seconds > 0 {
 		apiOptions = append(apiOptions, server.WithTechnicalDisplay(
 			baseURLs,
@@ -235,16 +246,17 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", listen, err)
 	}
-	errs := make(chan error, 1)
-	go func() {
-		slog.Info("matrix server listening", "address", listen, "backend", backendName, "width", width, "height", height)
-		errs <- httpServer.Serve(listener)
-	}()
 	if cfg.config.HTTP.InfoDisplaySeconds > 0 {
 		if err := api.ShowTechnicalInfo(); err != nil {
 			slog.Warn("unable to display startup technical information", "error", err)
 		}
 	}
+	go renderer.Run(ctx)
+	errs := make(chan error, 1)
+	go func() {
+		slog.Info("matrix server listening", "address", listen, "backend", backendName, "width", width, "height", height)
+		errs <- httpServer.Serve(listener)
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -257,6 +269,91 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 		}
 		return err
 	}
+}
+
+type clockController struct {
+	mu       sync.Mutex
+	mode     matrixclock.Mode
+	renderer *render.Renderer
+	width    int
+	height   int
+}
+
+func startClock(
+	ctx context.Context,
+	renderer *render.Renderer,
+	width, height int,
+	defaultMode string,
+) (*clockController, error) {
+	mode, err := matrixclock.ParseMode(defaultMode)
+	if err != nil {
+		return nil, err
+	}
+	controller := &clockController{
+		mode: mode, renderer: renderer, width: width, height: height,
+	}
+	if err := controller.update(time.Now()); err != nil {
+		return nil, fmt.Errorf("initialize clock: %w", err)
+	}
+	go func() {
+		for {
+			now := time.Now()
+			nextSecond := now.Truncate(time.Second).Add(time.Second)
+			timer := time.NewTimer(time.Until(nextSecond))
+			select {
+			case <-timer.C:
+				now = time.Now()
+				if err := controller.update(now); err != nil {
+					slog.Warn("unable to update clock", "error", err)
+				}
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return
+			}
+		}
+	}()
+	return controller, nil
+}
+
+func (c *clockController) update(now time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	next, err := matrixclock.Render(now, c.width, c.height, c.mode)
+	if err != nil {
+		return err
+	}
+	return c.renderer.SetDefault(next)
+}
+
+func (c *clockController) Activate(value string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	mode := c.mode
+	var err error
+	if value != "" {
+		mode, err = matrixclock.ParseMode(value)
+		if err != nil {
+			return "", err
+		}
+	}
+	next, err := matrixclock.Render(time.Now(), c.width, c.height, mode)
+	if err != nil {
+		return "", err
+	}
+	if err := c.renderer.SetDefault(next); err != nil {
+		return "", err
+	}
+	if err := c.renderer.ActivateDefault(); err != nil {
+		return "", err
+	}
+	c.mode = mode
+	return string(mode), nil
 }
 
 func advertisedBaseURLs(listen string) []string {

@@ -9,12 +9,14 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	matrixclock "github.com/Djoulzy/GoLedMatrix2/internal/clock"
 )
 
 type Config struct {
 	Hardware HardwareConfig `toml:"HardwareConfig"`
 	Runtime  RuntimeOptions `toml:"RuntimeOptions"`
 	HTTP     HTTPServer     `toml:"HTTPserver"`
+	Clock    ClockConfig    `toml:"Clock"`
 }
 
 type HardwareConfig struct {
@@ -50,6 +52,10 @@ type HTTPServer struct {
 	InfoDisplaySeconds int    `toml:"InfoDisplaySeconds"`
 }
 
+type ClockConfig struct {
+	DefaultMode string `toml:"DefaultMode"`
+}
+
 func Default() Config {
 	return Config{
 		Hardware: HardwareConfig{
@@ -60,7 +66,8 @@ func Default() Config {
 		Runtime: RuntimeOptions{
 			GPIOSlowdown: 1, Daemon: 0, DropPrivileges: -1, DoGPIOInit: true,
 		},
-		HTTP: HTTPServer{Addr: "detect", Port: 8080, Enabled: true, InfoDisplaySeconds: 5},
+		HTTP:  HTTPServer{Addr: "detect", Port: 8080, Enabled: true, InfoDisplaySeconds: 5},
+		Clock: ClockConfig{DefaultMode: string(matrixclock.Simple)},
 	}
 }
 
@@ -127,6 +134,9 @@ func (c Config) Validate() error {
 	}
 	if _, err := c.HTTP.ListenAddress(); err != nil {
 		return err
+	}
+	if _, err := matrixclock.ParseMode(c.Clock.DefaultMode); err != nil {
+		return fmt.Errorf("Clock.DefaultMode: %w", err)
 	}
 	return nil
 }

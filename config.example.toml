@@ -28,3 +28,7 @@ Addr                    = "detect"
 Port                    = 8080
 Enabled                 = true
 InfoDisplaySeconds      = 5
+
+[Clock]
+# Valeurs possibles : "simple", "fancy" ou "round".
+DefaultMode             = "simple"

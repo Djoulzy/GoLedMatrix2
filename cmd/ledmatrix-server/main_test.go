@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
 	appconfig "github.com/Djoulzy/GoLedMatrix2/internal/config"
 	"github.com/Djoulzy/GoLedMatrix2/internal/display"
+	"github.com/Djoulzy/GoLedMatrix2/internal/render"
 )
 
 func TestRPIConfigMapsSupportedFileSettings(t *testing.T) {
@@ -59,5 +61,28 @@ func TestSimulationGeometryUsesHardwareConfiguration(t *testing.T) {
 	}
 	if width != 128 || height != 128 || pitch != 8 {
 		t.Fatalf("simulation geometry = %dx%d pitch %d", width, height, pitch)
+	}
+}
+
+func TestClockControllerSwitchesMode(t *testing.T) {
+	target, err := display.NewMemory(128, 128)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	controller, err := startClock(ctx, render.New(target), 128, 128, "fancy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mode, err := controller.Activate("round")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode != "round" {
+		t.Fatalf("active mode = %q, want round", mode)
+	}
+	if _, err := controller.Activate("unknown"); err == nil {
+		t.Fatal("expected invalid clock mode error")
 	}
 }

@@ -28,10 +28,12 @@ type Renderer struct {
 	display display.Display
 	notify  chan struct{}
 
-	mu        sync.Mutex
-	pending   *submission
-	latest    *submission
-	temporary *temporarySubmission
+	mu            sync.Mutex
+	pending       *submission
+	latest        *submission
+	temporary     *temporarySubmission
+	defaultFrame  *frame.Frame
+	defaultActive bool
 
 	accepted atomic.Uint64
 	rendered atomic.Uint64
@@ -45,7 +47,10 @@ type Stats struct {
 }
 
 func New(target display.Display) *Renderer {
-	return &Renderer{display: target, notify: make(chan struct{}, 1)}
+	return &Renderer{
+		display: target, notify: make(chan struct{}, 1),
+		defaultActive: true,
+	}
 }
 
 // Submit takes ownership of next.Pixels. A later submission may supersede it
@@ -56,13 +61,47 @@ func (r *Renderer) Submit(next frame.Frame) uint64 {
 	submitted := &submission{sequence: sequence, frame: next}
 	r.pending = submitted
 	r.latest = submitted
+	r.defaultActive = false
 	r.mu.Unlock()
 	r.wake()
 	return sequence
 }
 
+// SetDefault updates the frame shown while the default mode is active. It does
+// not affect client frame statistics or replace the latest client submission.
+func (r *Renderer) SetDefault(next frame.Frame) error {
+	width, height := r.display.Geometry()
+	if next.Width != width || next.Height != height {
+		return fmt.Errorf("default frame geometry %dx%d does not match display %dx%d", next.Width, next.Height, width, height)
+	}
+	r.mu.Lock()
+	r.defaultFrame = &next
+	active := r.defaultActive
+	r.mu.Unlock()
+	if active {
+		r.wake()
+	}
+	return nil
+}
+
+// ActivateDefault discards the last client frame and returns to the default
+// display mode.
+func (r *Renderer) ActivateDefault() error {
+	r.mu.Lock()
+	if r.defaultFrame == nil {
+		r.mu.Unlock()
+		return fmt.Errorf("default display is unavailable")
+	}
+	r.pending = nil
+	r.latest = nil
+	r.defaultActive = true
+	r.mu.Unlock()
+	r.wake()
+	return nil
+}
+
 // ShowTemporary displays next for duration without changing the accepted frame
-// sequence. The newest client frame is restored when the duration expires.
+// sequence. The active client or default display is restored when it expires.
 func (r *Renderer) ShowTemporary(next frame.Frame, duration time.Duration) error {
 	width, height := r.display.Geometry()
 	if next.Width != width || next.Height != height {
@@ -128,30 +167,37 @@ func (r *Renderer) Run(ctx context.Context) {
 				}
 			}
 			if !showingTemporary {
-				r.presentPending(ctx)
+				r.presentCurrent(ctx)
 			}
 		case <-temporaryDone:
 			showingTemporary = false
 			temporaryDone = nil
-			r.restoreLatest(ctx)
+			r.restoreCurrent(ctx)
 		}
 	}
 }
 
-func (r *Renderer) presentPending(ctx context.Context) {
+func (r *Renderer) presentCurrent(ctx context.Context) {
 	for {
 		next := r.takePending()
 		if next == nil {
-			return
+			break
 		}
 		if err := r.present(ctx, next.frame, next.sequence, "frame"); err == nil {
 			r.rendered.Store(next.sequence)
 		}
 	}
+	if next := r.takeActiveDefault(); next != nil {
+		_ = r.present(ctx, *next, 0, "default frame")
+	}
 }
 
-func (r *Renderer) restoreLatest(ctx context.Context) {
-	next := r.takeLatest()
+func (r *Renderer) restoreCurrent(ctx context.Context) {
+	next, defaultFrame := r.takeCurrent()
+	if defaultFrame != nil {
+		_ = r.present(ctx, *defaultFrame, 0, "restored default frame")
+		return
+	}
 	if next == nil {
 		width, height := r.display.Geometry()
 		byteLen, _ := frame.ByteLen(width, height)
@@ -182,11 +228,23 @@ func (r *Renderer) takePending() *submission {
 	return next
 }
 
-func (r *Renderer) takeLatest() *submission {
+func (r *Renderer) takeCurrent() (*submission, *frame.Frame) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.pending = nil
-	return r.latest
+	if r.defaultActive {
+		return nil, r.defaultFrame
+	}
+	return r.latest, nil
+}
+
+func (r *Renderer) takeActiveDefault() *frame.Frame {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.defaultActive {
+		return nil
+	}
+	return r.defaultFrame
 }
 
 func (r *Renderer) takeTemporary() *temporarySubmission {

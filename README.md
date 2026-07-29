@@ -22,7 +22,10 @@ Fondations disponibles :
   `linux,cgo,rpi` ;
 - backend mémoire portable pour macOS, Linux, le développement et les tests ;
 - simulateur graphique représentant chaque pixel de la matrice logique ;
-- écran technique temporaire au démarrage, rendu avec une police TTF embarquée ;
+- écran technique temporaire au démarrage, rendu avec une police bitmap ;
+- trois horloges bitmap (`simple`, `fancy`, `round`) sélectionnables côté
+  serveur ou client et affichées par défaut lorsqu’aucune trame client n’est
+  active ;
 - configuration TOML stricte du matériel, du runtime GPIO et du serveur HTTP ;
 - arrêt propre, limites de taille, timeouts HTTP et tests avec race detector ;
 - dépendances Go et bibliothèque C++ épinglées.
@@ -91,6 +94,7 @@ le serveur.
 `202` signifie que la trame a été validée et mise en attente. Elle peut être
 remplacée par une trame plus récente avant le rendu si le producteur dépasse la
 capacité du matériel. Ce choix évite d’accumuler une animation déjà périmée.
+La première trame client suspend l’horloge par défaut.
 
 ### `POST /v1/display-info`
 
@@ -105,6 +109,29 @@ Commande équivalente avec le client :
 go run ./cmd/ledmatrix-client \
   -server http://192.168.0.18:8080 \
   -show-info
+```
+
+### `POST /v1/clock?mode={simple|fancy|round}`
+
+Sélectionne la variante, réactive l’horloge du serveur et abandonne la dernière
+trame client. La réponse est `202 Accepted` avec `{"mode":"round"}`. Les trois
+variantes sont :
+
+- `simple` : affichage horizontal `HH:MM`, séparateur clignotant et barre des
+  secondes ;
+- `fancy` : heures et minutes superposées avec deux couleurs ;
+- `round` : cadran à douze repères, progression circulaire des secondes et
+  heure centrée.
+
+Tous les glyphes sont bitmap et leur agrandissement utilise uniquement un
+facteur entier.
+
+Commande équivalente avec le client :
+
+```bash
+go run ./cmd/ledmatrix-client \
+  -server http://192.168.0.18:8080 \
+  -clock round
 ```
 
 Les erreurs utilisent `application/problem+json`. La version 1 n’inclut ni
@@ -154,6 +181,9 @@ Addr                    = "detect"
 Port                    = 8080
 Enabled                 = true
 InfoDisplaySeconds      = 5
+
+[Clock]
+DefaultMode             = "simple"
 ```
 
 Les valeurs sont appliquées dans cet ordre :
@@ -166,6 +196,10 @@ Une clé inconnue ou une valeur hors limites empêche le démarrage. Cela évite
 qu’une faute de frappe laisse la dalle fonctionner avec un réglage implicite.
 Les clés absentes conservent leur valeur par défaut.
 
+`Clock.DefaultMode` choisit l’horloge affichée au démarrage parmi `simple`,
+`fancy` et `round`. L’option serveur `-clock-mode` permet de la remplacer
+ponctuellement.
+
 `Addr = "detect"` écoute sur toutes les interfaces (`:Port`). Une adresse IP ou
 un nom d’hôte peut être donné pour restreindre l’écoute. `Enabled = false`
 initialise le backend puis désactive l’API HTTP ; le processus attend uniquement
@@ -173,9 +207,9 @@ un signal d’arrêt.
 
 `InfoDisplaySeconds` définit pendant combien de secondes l’écran technique est
 affiché au démarrage et à chaque appel de `POST /v1/display-info`. Une valeur de
-`0` désactive cet écran. La police
-`assets/ttf/fixed/Pixel_ModeX.otf` est embarquée dans le binaire : aucun fichier
-de police supplémentaire n’est nécessaire sur le Raspberry Pi.
+`0` désactive cet écran. L’affichage utilise les glyphes bitmap monospace de
+`github.com/hajimehoshi/bitmapfont` : ils sont dessinés sur la grille sans
+anticrénelage et ne nécessitent aucun fichier de police sur le Raspberry Pi.
 
 `Daemon`, `DropPrivileges` et `DoGpioInit` sont conservés dans le format afin de
 rester compatibles avec le fichier initial, mais ne sont pas transmis au
@@ -223,9 +257,9 @@ surface OpenGL encore à `0 × 0`.
 
 Au démarrage, le simulateur affiche le même écran technique que la dalle
 physique pendant `InfoDisplaySeconds`. La grille de pixels reste visible et
-l’écran revient ensuite à la dernière trame reçue, ou à une trame noire si
-aucun client n’a encore envoyé d’image. Une trame reçue pendant l’écran
-technique est conservée puis affichée automatiquement.
+l’écran revient ensuite à la dernière trame reçue, ou à l’horloge si aucun
+client n’a encore envoyé d’image. Une trame reçue pendant l’écran technique est
+conservée puis affichée automatiquement.
 
 Le simulateur calcule d'abord la géométrie physique avec `Cols × ChainLength` et
 `Rows × Parallel`, puis applique dans l'ordre les transformations de
@@ -260,6 +294,7 @@ Envoyer une couleur ou une image aux dimensions exactes :
 ```bash
 go run ./cmd/ledmatrix-client -server http://localhost:8080 -color '#2040ff'
 go run ./cmd/ledmatrix-client -server http://localhost:8080 -image frame.png
+go run ./cmd/ledmatrix-client -server http://localhost:8080 -clock fancy
 ```
 
 Les PNG et JPEG sont décodés côté client. Aucun redimensionnement implicite

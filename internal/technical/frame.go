@@ -8,13 +8,11 @@ import (
 	"net"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/Djoulzy/GoLedMatrix2/assets"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
+	"github.com/hajimehoshi/bitmapfont"
 	"golang.org/x/image/font"
-	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 )
 
@@ -32,21 +30,9 @@ type textLine struct {
 	color color.RGBA
 }
 
-var (
-	parsedFont     *opentype.Font
-	parsedFontErr  error
-	parsedFontOnce sync.Once
-)
-
 func Render(state State) (frame.Frame, error) {
 	if _, err := frame.ByteLen(state.Width, state.Height); err != nil {
 		return frame.Frame{}, err
-	}
-	parsedFontOnce.Do(func() {
-		parsedFont, parsedFontErr = opentype.Parse(assets.TechnicalInfoFont)
-	})
-	if parsedFontErr != nil {
-		return frame.Frame{}, fmt.Errorf("parse technical information font: %w", parsedFontErr)
 	}
 
 	host, port := endpointParts(state.BaseURL)
@@ -56,7 +42,6 @@ func Render(state State) (frame.Frame, error) {
 	if err != nil {
 		return frame.Frame{}, err
 	}
-	defer closeFace(face)
 
 	canvas := image.NewRGBA(image.Rect(0, 0, state.Width, state.Height))
 	drawer := &font.Drawer{Dst: canvas, Face: face}
@@ -67,9 +52,14 @@ func Render(state State) (frame.Frame, error) {
 
 	for _, line := range lines {
 		line.text = fitText(face, line.text, state.Width-2)
-		width := drawer.MeasureString(line.text).Ceil()
+		bounds, _ := font.BoundString(face, line.text)
+		width := bounds.Max.X.Ceil() - bounds.Min.X.Floor()
+		left := max(1, (state.Width-width)/2)
 		drawer.Src = image.NewUniform(line.color)
-		drawer.Dot = fixed.P(max(1, (state.Width-width)/2), baseline)
+		drawer.Dot = fixed.Point26_6{
+			X: fixed.I(left) - bounds.Min.X,
+			Y: fixed.I(baseline),
+		}
 		drawer.DrawString(line.text)
 		baseline += lineHeight
 	}
@@ -88,16 +78,30 @@ func technicalLines(state State, host, port string) []textLine {
 		if port != "" {
 			endpoint = net.JoinHostPort(host, port)
 		}
+		if state.Height < 36 {
+			return []textLine{
+				{text: fmt.Sprintf("%s %dX%d V%s", compactLabel(backend), state.Width, state.Height, state.Protocol), color: green},
+				{text: host, color: blue},
+			}
+		}
 		return []textLine{
-			{text: "GOLED " + backend, color: green},
-			{text: fmt.Sprintf("%dX%d API V%s", state.Width, state.Height, state.Protocol), color: yellow},
+			{text: "GoLED " + backend, color: green},
+			{text: fmt.Sprintf("%dx%d API V%s", state.Width, state.Height, state.Protocol), color: yellow},
 			{text: endpoint, color: blue},
 		}
 	}
 
+	if state.Height < 64 {
+		return []textLine{
+			{text: "GoLED Ready", color: green},
+			{text: fmt.Sprintf("%s %dx%d", backend, state.Width, state.Height), color: yellow},
+			{text: host, color: blue},
+		}
+	}
+
 	lines := []textLine{
-		{text: "GOLED READY", color: green},
-		{text: fmt.Sprintf("%s %dX%d", backend, state.Width, state.Height), color: yellow},
+		{text: "GoLED Ready", color: green},
+		{text: fmt.Sprintf("%s %dx%d", backend, state.Width, state.Height), color: yellow},
 	}
 	if host != "" {
 		lines = append(lines, textLine{text: host, color: blue})
@@ -106,25 +110,33 @@ func technicalLines(state State, host, port string) []textLine {
 		lines = append(lines, textLine{text: "HTTP " + port, color: blue})
 	}
 	return append(lines, textLine{
-		text:  fmt.Sprintf("API V%s UP %s", state.Protocol, shortDuration(state.Uptime)),
+		text:  fmt.Sprintf("API v%s UP %s", state.Protocol, shortDuration(state.Uptime)),
 		color: grey,
 	})
 }
 
 func fittingFace(lines []textLine, width, height int) (font.Face, error) {
-	maxSize := min(16, max(5, height/len(lines)))
-	for size := maxSize; size >= 5; size-- {
-		face, err := opentype.NewFace(parsedFont, &opentype.FaceOptions{
-			Size: float64(size), DPI: 72, Hinting: font.HintingFull,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("create technical information font: %w", err)
-		}
+	faces := []font.Face{bitmapfont.Gothic12r, bitmapfont.Gothic10r}
+	var fallback font.Face
+	for _, face := range faces {
 		lineHeight := face.Metrics().Height.Ceil()
-		if lineHeight*len(lines) <= height-2 {
+		if lineHeight*len(lines) > height-2 {
+			continue
+		}
+		fallback = face
+		allLinesFit := true
+		for _, line := range lines {
+			if font.MeasureString(face, line.text).Ceil() > width-2 {
+				allLinesFit = false
+				break
+			}
+		}
+		if allLinesFit {
 			return face, nil
 		}
-		closeFace(face)
+	}
+	if fallback != nil {
+		return fallback, nil
 	}
 	return nil, fmt.Errorf("matrix height %d is too small for technical information", height)
 }
@@ -157,6 +169,14 @@ func endpointParts(rawURL string) (string, string) {
 	return strings.ToUpper(host), port
 }
 
+func compactLabel(value string) string {
+	runes := []rune(value)
+	if len(runes) > 3 {
+		runes = runes[:3]
+	}
+	return string(runes)
+}
+
 func shortDuration(value time.Duration) string {
 	if value < time.Minute {
 		return fmt.Sprintf("%02dS", max(0, int(value.Seconds())))
@@ -168,10 +188,4 @@ func shortDuration(value time.Duration) string {
 		return fmt.Sprintf("%02dH", int(value.Hours()))
 	}
 	return fmt.Sprintf("%02dD", int(value.Hours()/24))
-}
-
-func closeFace(face font.Face) {
-	if closer, ok := face.(interface{ Close() error }); ok {
-		_ = closer.Close()
-	}
 }

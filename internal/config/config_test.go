@@ -26,6 +26,9 @@ DoGpioInit = true
 Addr = "127.0.0.1"
 Port = 9090
 Enabled = true
+
+[Clock]
+DefaultMode = "round"
 `)
 	if loaded.Hardware.ChainLength != 4 || loaded.Hardware.Parallel != 2 {
 		t.Fatalf("unexpected hardware config: %+v", loaded.Hardware)
@@ -38,6 +41,9 @@ Enabled = true
 	}
 	if loaded.HTTP.InfoDisplaySeconds != 5 {
 		t.Fatalf("InfoDisplaySeconds = %d, want default 5", loaded.HTTP.InfoDisplaySeconds)
+	}
+	if loaded.Clock.DefaultMode != "round" {
+		t.Fatalf("Clock.DefaultMode = %q, want round", loaded.Clock.DefaultMode)
 	}
 	address, err := loaded.HTTP.ListenAddress()
 	if err != nil {
@@ -67,6 +73,14 @@ func TestValidateRejectsInvalidValues(t *testing.T) {
 func TestValidateRejectsInvalidInfoDisplayDuration(t *testing.T) {
 	config := Default()
 	config.HTTP.InfoDisplaySeconds = 61
+	if err := config.Validate(); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestValidateRejectsInvalidClockMode(t *testing.T) {
+	config := Default()
+	config.Clock.DefaultMode = "analog"
 	if err := config.Validate(); err == nil {
 		t.Fatal("expected validation error")
 	}
