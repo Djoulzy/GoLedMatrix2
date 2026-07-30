@@ -10,6 +10,7 @@ import (
 	_ "image/png"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -26,7 +27,11 @@ func main() {
 	showClock := flag.String("clock", "", "clock display mode: simple, fancy, or round")
 	clockColor1 := flag.String("clock-color1", "", "clock primary color in #RRGGBB form")
 	clockColor2 := flag.String("clock-color2", "", "clock secondary color in #RRGGBB form")
-	timeout := flag.Duration("timeout", 5*time.Second, "HTTP request timeout")
+	gifPath := flag.String("gif", "", "GIF animation to preprocess, store, and play")
+	animationName := flag.String("animation-name", "", "stored animation name (defaults to the GIF filename)")
+	playAnimation := flag.String("play-animation", "", "play a previously stored animation")
+	animationLoops := flag.Int("animation-loops", -1, "total loops: 0 infinite, -1 uses the GIF value")
+	timeout := flag.Duration("timeout", 2*time.Minute, "HTTP request timeout")
 	flag.Parse()
 
 	selectedActions := 0
@@ -42,11 +47,26 @@ func main() {
 	if *showClock != "" {
 		selectedActions++
 	}
+	if *gifPath != "" {
+		selectedActions++
+	}
+	if *playAnimation != "" {
+		selectedActions++
+	}
 	if selectedActions != 1 {
-		log.Fatal("provide exactly one of -image, -color, -show-info, or -clock")
+		log.Fatal("provide exactly one of -image, -color, -show-info, -clock, -gif, or -play-animation")
 	}
 	if *showClock == "" && (*clockColor1 != "" || *clockColor2 != "") {
 		log.Fatal("-clock-color1 and -clock-color2 require -clock")
+	}
+	if *animationLoops < -1 {
+		log.Fatal("-animation-loops must be -1, 0, or a positive value")
+	}
+	if int64(*animationLoops) > int64(^uint32(0)) {
+		log.Fatal("-animation-loops is too large")
+	}
+	if *gifPath == "" && (*animationName != "" || *animationLoops != -1) {
+		log.Fatal("-animation-name and -animation-loops require -gif")
 	}
 	api, err := client.New(*serverURL, *timeout)
 	if err != nil {
@@ -67,12 +87,49 @@ func main() {
 		fmt.Printf("%s clock display requested\n", *showClock)
 		return
 	}
+	if *playAnimation != "" {
+		metadata, err := api.PlayAnimation(ctx, *playAnimation)
+		if err != nil {
+			log.Fatalf("play animation: %v", err)
+		}
+		fmt.Printf("animation %q playing (%d frames, %d ms)\n",
+			metadata.Name, metadata.FrameCount, metadata.DurationMS)
+		return
+	}
 	info, err := api.Info(ctx)
 	if err != nil {
 		log.Fatalf("query server: %v", err)
 	}
 	if info.ProtocolVersion != "1" || info.PixelFormat != frame.PixelFormat {
 		log.Fatalf("unsupported server protocol version=%q pixel_format=%q", info.ProtocolVersion, info.PixelFormat)
+	}
+	if *gifPath != "" {
+		name := *animationName
+		if name == "" {
+			name = strings.TrimSuffix(filepath.Base(*gifPath), filepath.Ext(*gifPath))
+		}
+		file, err := os.Open(*gifPath)
+		if err != nil {
+			log.Fatalf("open GIF: %v", err)
+		}
+		bundle, prepareErr := client.PrepareGIF(file, info.Width, info.Height)
+		closeErr := file.Close()
+		if prepareErr != nil {
+			log.Fatalf("prepare GIF: %v", prepareErr)
+		}
+		if closeErr != nil {
+			log.Fatalf("close GIF: %v", closeErr)
+		}
+		if *animationLoops >= 0 {
+			bundle.Loops = uint32(*animationLoops)
+		}
+		metadata, err := api.UploadAnimation(ctx, name, bundle, true)
+		if err != nil {
+			log.Fatalf("upload animation: %v", err)
+		}
+		fmt.Printf("animation %q stored and playing (%d frames, %d ms, loops=%d)\n",
+			metadata.Name, metadata.FrameCount, metadata.DurationMS, metadata.Loops)
+		return
 	}
 
 	var next frame.Frame

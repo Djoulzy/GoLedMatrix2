@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Djoulzy/GoLedMatrix2/internal/animation"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
 )
@@ -28,6 +29,8 @@ type API struct {
 	technicalFrame    func(Info) (frame.Frame, error)
 	technicalDuration time.Duration
 	clockDisplay      func(ClockSelection) (ClockState, error)
+	animations        *animation.Player
+	maxAnimationBytes int64
 }
 
 type Info struct {
@@ -86,6 +89,20 @@ func WithClockDisplay(display func(ClockSelection) (ClockState, error)) Option {
 	}
 }
 
+func WithAnimations(player *animation.Player, maxUploadBytes int64) Option {
+	return func(api *API) error {
+		if player == nil {
+			return errors.New("animation player is required")
+		}
+		if maxUploadBytes <= 0 {
+			return errors.New("animation upload limit must be positive")
+		}
+		api.animations = player
+		api.maxAnimationBytes = maxUploadBytes
+		return nil
+	}
+}
+
 func New(width, height int, backend string, renderer *render.Renderer, options ...Option) (*API, error) {
 	frameSize, err := frame.ByteLen(width, height)
 	if err != nil {
@@ -113,6 +130,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/frame", a.putFrame)
 	mux.HandleFunc("POST /v1/display-info", a.displayInfo)
 	mux.HandleFunc("POST /v1/clock", a.displayClock)
+	mux.HandleFunc("PUT /v1/animations/{name}", a.putAnimation)
+	mux.HandleFunc("POST /v1/animations/{name}/play", a.playAnimation)
 	return mux
 }
 
@@ -207,10 +226,58 @@ func (a *API) putFrame(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusBadRequest, "invalid frame", err.Error())
 		return
 	}
+	if a.animations != nil {
+		a.animations.Stop()
+	}
 	sequence := a.renderer.Submit(next)
 	writeJSON(w, http.StatusAccepted, struct {
 		Sequence uint64 `json:"sequence"`
 	}{Sequence: sequence})
+}
+
+func (a *API) putAnimation(w http.ResponseWriter, r *http.Request) {
+	if a.animations == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "animations unavailable", "animation storage is disabled")
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != animation.MediaType {
+		writeProblem(w, http.StatusUnsupportedMediaType, "unsupported media type",
+			fmt.Sprintf("Content-Type must be %s", animation.MediaType))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, a.maxAnimationBytes)
+	metadata, err := a.animations.Upload(r.PathValue("name"), r.Body)
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeProblem(w, http.StatusRequestEntityTooLarge, "animation too large", err.Error())
+			return
+		}
+		writeProblem(w, http.StatusBadRequest, "invalid animation", err.Error())
+		return
+	}
+	if r.URL.Query().Get("play") != "false" {
+		metadata, err = a.animations.Play(metadata.Name)
+		if err != nil {
+			writeProblem(w, http.StatusInternalServerError, "unable to play animation", err.Error())
+			return
+		}
+	}
+	writeJSON(w, http.StatusCreated, metadata)
+}
+
+func (a *API) playAnimation(w http.ResponseWriter, r *http.Request) {
+	if a.animations == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "animations unavailable", "animation storage is disabled")
+		return
+	}
+	metadata, err := a.animations.Play(r.PathValue("name"))
+	if err != nil {
+		writeProblem(w, http.StatusNotFound, "animation unavailable", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, metadata)
 }
 
 func writeProblem(w http.ResponseWriter, status int, title, detail string) {

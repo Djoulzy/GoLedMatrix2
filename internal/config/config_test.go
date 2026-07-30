@@ -31,6 +31,10 @@ Enabled = true
 DefaultMode = "round"
 Color1 = "#112233"
 Color2 = "#AABBCC"
+
+[Animations]
+Directory = "stored"
+MaxUploadMB = 64
 `)
 	if loaded.Hardware.ChainLength != 4 || loaded.Hardware.Parallel != 2 {
 		t.Fatalf("unexpected hardware config: %+v", loaded.Hardware)
@@ -49,6 +53,9 @@ Color2 = "#AABBCC"
 	}
 	if loaded.Clock.Color1 != "#112233" || loaded.Clock.Color2 != "#AABBCC" {
 		t.Fatalf("unexpected clock colors: %+v", loaded.Clock)
+	}
+	if loaded.Animation.Directory != "stored" || loaded.Animation.MaxUploadMB != 64 {
+		t.Fatalf("unexpected animation config: %+v", loaded.Animation)
 	}
 	address, err := loaded.HTTP.ListenAddress()
 	if err != nil {
@@ -94,6 +101,14 @@ func TestValidateRejectsInvalidClockMode(t *testing.T) {
 func TestValidateRejectsInvalidClockColor(t *testing.T) {
 	config := Default()
 	config.Clock.Color1 = "red"
+	if err := config.Validate(); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestValidateRejectsInvalidAnimationConfig(t *testing.T) {
+	config := Default()
+	config.Animation.MaxUploadMB = 0
 	if err := config.Validate(); err == nil {
 		t.Fatal("expected validation error")
 	}

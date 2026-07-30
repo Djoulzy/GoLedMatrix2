@@ -33,5 +33,6 @@ go.work.sum
 
 # Project outputs
 /bin/
+/animations/
 *.log
 .DS_Store

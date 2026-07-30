@@ -26,6 +26,8 @@ Fondations disponibles :
 - trois horloges (`simple`, `fancy`, `round`) sélectionnables côté
   serveur ou client et affichées par défaut lorsqu’aucune trame client n’est
   active ;
+- prétraitement des GIF côté client, stockage persistant des trames RGB24 sur
+  le Pi et lecture autonome temporisée ;
 - configuration TOML stricte du matériel, du runtime GPIO et du serveur HTTP ;
 - arrêt propre, limites de taille, timeouts HTTP et tests avec race detector ;
 - dépendances Go et bibliothèque C++ épinglées.
@@ -33,7 +35,7 @@ Fondations disponibles :
 À venir :
 
 - authentification et TLS pour une exposition hors réseau local ;
-- bibliothèque de composition et ordonnanceur d’animations côté client ;
+- bibliothèque de composition avancée côté client au-delà du support GIF ;
 - métriques et mesures de débit/latence sur le matériel cible ;
 - paquet Debian et procédure de désinstallation.
 
@@ -50,7 +52,8 @@ de la gigue sans améliorer la stabilité.
 
 ```text
 composition/PNG (client) -> RGB24 -> HTTP -> dernière trame -> Render/VSync
-                                                           -> scan GPIO natif
+GIF -> composition/resize client -> paquet RGB24 temporisé -> stockage/lecture
+                                                              -> scan GPIO natif
 ```
 
 ## Protocole HTTP v1
@@ -137,9 +140,45 @@ go run ./cmd/ledmatrix-client \
   -clock-color2 '#ffffff'
 ```
 
-Les erreurs utilisent `application/problem+json`. La version 1 n’inclut ni
-compression, ni redimensionnement, ni delta entre images : ces opérations
-coûteuses restent du côté client.
+### `PUT /v1/animations/{name}`
+
+Stocke une animation prétraitée au format
+`application/vnd.goledmatrix.animation+gzip`. Le paquet contient uniquement la
+géométrie, les trames RGB24, leurs durées et le nombre de boucles. Par défaut,
+l’animation démarre après son installation ; `?play=false` la stocke sans la
+lancer.
+
+Le client décode le GIF, applique transparence et modes de disposal, adapte
+l’image à la matrice en conservant son ratio, puis téléverse le résultat :
+
+```bash
+go run ./cmd/ledmatrix-client \
+  -server http://192.168.0.18:8080 \
+  -gif animation.gif \
+  -animation-name demo
+```
+
+`-animation-loops 0` force une boucle infinie. `-1`, la valeur par défaut,
+conserve le comportement indiqué dans le GIF.
+
+### `POST /v1/animations/{name}/play`
+
+Relance une animation déjà stockée, sans renvoyer le GIF ni les trames :
+
+```bash
+go run ./cmd/ledmatrix-client \
+  -server http://192.168.0.18:8080 \
+  -play-animation demo
+```
+
+Une trame client, une autre animation ou le retour à l’horloge interrompt la
+lecture active. L’écran technique reste temporaire et restaure ensuite le mode
+actif.
+
+Les erreurs utilisent `application/problem+json`. Le serveur ne décode ni GIF,
+PNG ou JPEG et ne redimensionne aucune image : ces opérations coûteuses restent
+du côté client. Seul le paquet de trames préparées est compressé pour le
+transfert et le stockage.
 
 ## Configuration du serveur
 
@@ -189,6 +228,10 @@ InfoDisplaySeconds      = 5
 DefaultMode             = "simple"
 Color1                  = ""
 Color2                  = ""
+
+[Animations]
+Directory               = "animations"
+MaxUploadMB             = 128
 ```
 
 Les valeurs sont appliquées dans cet ordre :
@@ -209,6 +252,11 @@ ponctuellement. `Clock.Color1` et `Clock.Color2` acceptent des couleurs
 - `simple` : blanc et blanc (`HH:MM`, puis secondes) ;
 - `fancy` : orange et cyan (heures, puis minutes) ;
 - `round` : rouge et blanc (heure/progression, puis cadran).
+
+`Animations.Directory` définit le répertoire des fichiers `.glma` persistants.
+`Animations.MaxUploadMB` borne la taille compressée d’un téléversement. Avec le
+service `systemd` fourni, le répertoire relatif `animations` se trouve dans
+`/var/lib/goledmatrix2/animations`.
 
 `Addr = "detect"` écoute sur toutes les interfaces (`:Port`). Une adresse IP ou
 un nom d’hôte peut être donné pour restreindre l’écoute. `Enabled = false`
@@ -306,10 +354,13 @@ go run ./cmd/ledmatrix-client -server http://localhost:8080 -color '#2040ff'
 go run ./cmd/ledmatrix-client -server http://localhost:8080 -image frame.png
 go run ./cmd/ledmatrix-client -server http://localhost:8080 \
   -clock fancy -clock-color1 '#ff8337' -clock-color2 '#7be0de'
+go run ./cmd/ledmatrix-client -server http://localhost:8080 \
+  -gif animation.gif -animation-name demo
 ```
 
-Les PNG et JPEG sont décodés côté client. Aucun redimensionnement implicite
-n’est effectué afin d’éviter les erreurs silencieuses de cadrage.
+Les PNG et JPEG sont décodés côté client sans redimensionnement implicite. Les
+GIF utilisés avec `-gif` suivent explicitement une politique « contain » :
+ratio conservé, centrage et bandes noires si nécessaire.
 
 ### Diagnostic du simulateur
 
@@ -513,6 +564,9 @@ Pi dispose d'un pare-feu, autoriser uniquement le sous-réseau local utilisé.
 - La stratégie « dernière trame gagnante » borne la file et la latence.
 - La bibliothèque native réalise le double buffering et attend le VSync.
 - Une connexion HTTP persistante est réutilisée par le client Go.
+- Les animations autonomes sont lues depuis des trames RGB24 déjà préparées ;
+  le Pi ne décode jamais le GIF et utilise des échéances monotones pour limiter
+  la dérive temporelle.
 
 La fréquence d’animation réellement soutenable dépend surtout de la taille,
 du chaînage, du multiplexage, de `pwm-bits`, du modèle de Pi et de la dalle.

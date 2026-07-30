@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Djoulzy/GoLedMatrix2/internal/animation"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 	"github.com/Djoulzy/GoLedMatrix2/internal/server"
 )
@@ -117,6 +118,69 @@ func (c *Client) DisplayClock(ctx context.Context, mode, color1, color2 string) 
 		return responseError(resp)
 	}
 	return nil
+}
+
+func (c *Client) UploadAnimation(
+	ctx context.Context,
+	name string,
+	bundle animation.Bundle,
+	play bool,
+) (animation.Metadata, error) {
+	var metadata animation.Metadata
+	if err := animation.ValidateName(name); err != nil {
+		return metadata, err
+	}
+	reader, writer := io.Pipe()
+	go func() {
+		err := animation.Encode(writer, bundle)
+		_ = writer.CloseWithError(err)
+	}()
+	endpoint := c.endpoint("/v1/animations/" + name)
+	if !play {
+		endpoint += "?play=false"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, endpoint, reader)
+	if err != nil {
+		return metadata, err
+	}
+	req.Header.Set("Content-Type", animation.MediaType)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return metadata, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		return metadata, responseError(resp)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
+		return metadata, fmt.Errorf("decode animation response: %w", err)
+	}
+	return metadata, nil
+}
+
+func (c *Client) PlayAnimation(ctx context.Context, name string) (animation.Metadata, error) {
+	var metadata animation.Metadata
+	if err := animation.ValidateName(name); err != nil {
+		return metadata, err
+	}
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, c.endpoint("/v1/animations/"+name+"/play"), nil,
+	)
+	if err != nil {
+		return metadata, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return metadata, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		return metadata, responseError(resp)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
+		return metadata, fmt.Errorf("decode animation response: %w", err)
+	}
+	return metadata, nil
 }
 
 func (c *Client) endpoint(path string) string {

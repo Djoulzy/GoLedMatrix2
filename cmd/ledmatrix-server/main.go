@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Djoulzy/GoLedMatrix2/internal/animation"
 	matrixclock "github.com/Djoulzy/GoLedMatrix2/internal/clock"
 	appconfig "github.com/Djoulzy/GoLedMatrix2/internal/config"
 	"github.com/Djoulzy/GoLedMatrix2/internal/display"
@@ -216,8 +217,26 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 		}
 	}
 	baseURLs := advertisedBaseURLs(listen)
-	apiOptions := make([]server.Option, 0, 2)
-	apiOptions = append(apiOptions, server.WithClockDisplay(clockController.Activate))
+	animationStore, err := animation.NewStore(cfg.config.Animation.Directory)
+	if err != nil {
+		return err
+	}
+	animationPlayer := animation.NewPlayer(ctx, animationStore, renderer, width, height)
+	apiOptions := make([]server.Option, 0, 3)
+	apiOptions = append(apiOptions,
+		server.WithClockDisplay(func(selection server.ClockSelection) (server.ClockState, error) {
+			state, err := clockController.Activate(selection)
+			if err != nil {
+				return server.ClockState{}, err
+			}
+			animationPlayer.Stop()
+			if err := renderer.ActivateDefault(); err != nil {
+				return server.ClockState{}, err
+			}
+			return state, nil
+		}),
+		server.WithAnimations(animationPlayer, cfg.config.Animation.MaxUploadMB*1024*1024),
+	)
 	if seconds := cfg.config.HTTP.InfoDisplaySeconds; seconds > 0 {
 		apiOptions = append(apiOptions, server.WithTechnicalDisplay(
 			baseURLs,
@@ -244,7 +263,7 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 		Addr:              listen,
 		Handler:           api.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
+		ReadTimeout:       2 * time.Minute,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}

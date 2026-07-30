@@ -14,6 +14,8 @@ TimeoutStopSec=10
 # require root privileges.
 User=root
 Group=root
+WorkingDirectory=/var/lib/goledmatrix2
+StateDirectory=goledmatrix2
 
 [Install]
 WantedBy=multi-user.target

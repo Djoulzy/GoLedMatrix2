@@ -1,12 +1,14 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/Djoulzy/GoLedMatrix2/internal/animation"
 	"github.com/Djoulzy/GoLedMatrix2/internal/display"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
@@ -76,6 +78,50 @@ func TestDisplayClock(t *testing.T) {
 	}
 	if method != http.MethodPost || path != "/v1/clock?color1=%23112233&color2=%23AABBCC&mode=round" {
 		t.Fatalf("request = %s %s", method, path)
+	}
+}
+
+func TestUploadAndPlayAnimation(t *testing.T) {
+	client, err := New("http://matrix.test", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, _ := frame.New(1, 1, []byte{1, 2, 3})
+	bundle := animation.Bundle{
+		Width: 1, Height: 1, Loops: 1,
+		Frames: []animation.TimedFrame{{Frame: next, Duration: 20 * time.Millisecond}},
+	}
+	var uploaded bool
+	client.http.Transport = handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch {
+		case request.Method == http.MethodPut:
+			if request.URL.Path != "/v1/animations/demo" ||
+				request.Header.Get("Content-Type") != animation.MediaType {
+				t.Fatalf("upload request = %s %s", request.Method, request.URL.Path)
+			}
+			var body bytes.Buffer
+			_, _ = body.ReadFrom(request.Body)
+			if _, err := animation.Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			uploaded = true
+			w.WriteHeader(http.StatusCreated)
+		case request.Method == http.MethodPost:
+			if request.URL.Path != "/v1/animations/demo/play" {
+				t.Fatalf("play path = %s", request.URL.Path)
+			}
+			w.WriteHeader(http.StatusAccepted)
+		}
+		_, _ = w.Write([]byte(`{"name":"demo","width":1,"height":1,"frame_count":1}`))
+	})}
+	if _, err := client.UploadAnimation(context.Background(), "demo", bundle, true); err != nil {
+		t.Fatal(err)
+	}
+	if !uploaded {
+		t.Fatal("animation was not uploaded")
+	}
+	if _, err := client.PlayAnimation(context.Background(), "demo"); err != nil {
+		t.Fatal(err)
 	}
 }
 

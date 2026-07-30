@@ -94,6 +94,20 @@ func TestDefaultFrameStopsForClientAndCanBeReactivated(t *testing.T) {
 	expectPresented(t, target.presented, 8)
 }
 
+func TestPlaybackFrameDoesNotChangeClientStats(t *testing.T) {
+	target := &recordingDisplay{presented: make(chan byte, 2)}
+	renderer := New(target)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go renderer.Run(ctx)
+
+	renderer.SubmitPlayback(onePixel(6))
+	expectPresented(t, target.presented, 6)
+	if stats := renderer.Stats(); stats.Accepted != 0 || stats.Rendered != 0 {
+		t.Fatalf("playback changed client stats: %+v", stats)
+	}
+}
+
 func TestTemporaryFrameRestoresDefault(t *testing.T) {
 	target := &recordingDisplay{presented: make(chan byte, 4)}
 	renderer := New(target)

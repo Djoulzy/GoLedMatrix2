@@ -17,6 +17,7 @@ import (
 type submission struct {
 	sequence uint64
 	frame    frame.Frame
+	counted  bool
 }
 
 type temporarySubmission struct {
@@ -58,13 +59,25 @@ func New(target display.Display) *Renderer {
 func (r *Renderer) Submit(next frame.Frame) uint64 {
 	r.mu.Lock()
 	sequence := r.accepted.Add(1)
-	submitted := &submission{sequence: sequence, frame: next}
+	submitted := &submission{sequence: sequence, frame: next, counted: true}
 	r.pending = submitted
 	r.latest = submitted
 	r.defaultActive = false
 	r.mu.Unlock()
 	r.wake()
 	return sequence
+}
+
+// SubmitPlayback queues an autonomous animation frame without changing client
+// acceptance statistics.
+func (r *Renderer) SubmitPlayback(next frame.Frame) {
+	r.mu.Lock()
+	submitted := &submission{frame: next}
+	r.pending = submitted
+	r.latest = submitted
+	r.defaultActive = false
+	r.mu.Unlock()
+	r.wake()
 }
 
 // SetDefault updates the frame shown while the default mode is active. It does
@@ -183,7 +196,7 @@ func (r *Renderer) presentCurrent(ctx context.Context) {
 		if next == nil {
 			break
 		}
-		if err := r.present(ctx, next.frame, next.sequence, "frame"); err == nil {
+		if err := r.present(ctx, next.frame, next.sequence, "frame"); err == nil && next.counted {
 			r.rendered.Store(next.sequence)
 		}
 	}
@@ -206,7 +219,7 @@ func (r *Renderer) restoreCurrent(ctx context.Context) {
 		}, 0, "blank frame")
 		return
 	}
-	if err := r.present(ctx, next.frame, next.sequence, "restored frame"); err == nil {
+	if err := r.present(ctx, next.frame, next.sequence, "restored frame"); err == nil && next.counted {
 		r.rendered.Store(next.sequence)
 	}
 }

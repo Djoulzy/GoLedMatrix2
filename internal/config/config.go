@@ -13,10 +13,11 @@ import (
 )
 
 type Config struct {
-	Hardware HardwareConfig `toml:"HardwareConfig"`
-	Runtime  RuntimeOptions `toml:"RuntimeOptions"`
-	HTTP     HTTPServer     `toml:"HTTPserver"`
-	Clock    ClockConfig    `toml:"Clock"`
+	Hardware  HardwareConfig  `toml:"HardwareConfig"`
+	Runtime   RuntimeOptions  `toml:"RuntimeOptions"`
+	HTTP      HTTPServer      `toml:"HTTPserver"`
+	Clock     ClockConfig     `toml:"Clock"`
+	Animation AnimationConfig `toml:"Animations"`
 }
 
 type HardwareConfig struct {
@@ -58,6 +59,11 @@ type ClockConfig struct {
 	Color2      string `toml:"Color2"`
 }
 
+type AnimationConfig struct {
+	Directory   string `toml:"Directory"`
+	MaxUploadMB int64  `toml:"MaxUploadMB"`
+}
+
 func Default() Config {
 	return Config{
 		Hardware: HardwareConfig{
@@ -68,8 +74,9 @@ func Default() Config {
 		Runtime: RuntimeOptions{
 			GPIOSlowdown: 1, Daemon: 0, DropPrivileges: -1, DoGPIOInit: true,
 		},
-		HTTP:  HTTPServer{Addr: "detect", Port: 8080, Enabled: true, InfoDisplaySeconds: 5},
-		Clock: ClockConfig{DefaultMode: string(matrixclock.Simple)},
+		HTTP:      HTTPServer{Addr: "detect", Port: 8080, Enabled: true, InfoDisplaySeconds: 5},
+		Clock:     ClockConfig{DefaultMode: string(matrixclock.Simple)},
+		Animation: AnimationConfig{Directory: "animations", MaxUploadMB: 128},
 	}
 }
 
@@ -143,6 +150,12 @@ func (c Config) Validate() error {
 	}
 	if _, err := matrixclock.ResolvePalette(mode, c.Clock.Color1, c.Clock.Color2); err != nil {
 		return fmt.Errorf("Clock: %w", err)
+	}
+	if strings.TrimSpace(c.Animation.Directory) == "" {
+		return errors.New("Animations.Directory must not be empty")
+	}
+	if c.Animation.MaxUploadMB < 1 || c.Animation.MaxUploadMB > 1024 {
+		return errors.New("Animations.MaxUploadMB must be between 1 and 1024")
 	}
 	return nil
 }

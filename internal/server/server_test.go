@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Djoulzy/GoLedMatrix2/internal/animation"
 	"github.com/Djoulzy/GoLedMatrix2/internal/display"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
@@ -185,5 +186,61 @@ func TestDisplayClock(t *testing.T) {
 	got := memory.Latest()
 	if len(got.Pixels) == 0 || got.Pixels[0] != 7 {
 		t.Fatalf("clock pixels = %v, want first channel 7", got.Pixels)
+	}
+}
+
+func TestUploadAndReplayAnimation(t *testing.T) {
+	memory, err := display.NewMemory(2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderer := render.New(memory)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go renderer.Run(ctx)
+	store, err := animation.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	player := animation.NewPlayer(ctx, store, renderer, 2, 1)
+	api, err := New(
+		2, 1, "memory", renderer,
+		WithAnimations(player, 1024*1024),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, _ := frame.New(2, 1, []byte{7, 0, 0, 7, 0, 0})
+	bundle := animation.Bundle{
+		Width: 2, Height: 1, Loops: 1,
+		Frames: []animation.TimedFrame{{Frame: next, Duration: 50 * time.Millisecond}},
+	}
+	var payload bytes.Buffer
+	if err := animation.Encode(&payload, bundle); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPut, "/v1/animations/demo", &payload)
+	request.Header.Set("Content-Type", animation.MediaType)
+	response := httptest.NewRecorder()
+	api.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if got := memory.Latest(); len(got.Pixels) > 0 && got.Pixels[0] == 7 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if got := memory.Latest(); len(got.Pixels) == 0 || got.Pixels[0] != 7 {
+		t.Fatalf("animation pixels = %v", got.Pixels)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/v1/animations/demo/play", nil)
+	response = httptest.NewRecorder()
+	api.Handler().ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("replay status = %d, body = %s", response.Code, response.Body)
 	}
 }
