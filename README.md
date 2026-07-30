@@ -14,7 +14,8 @@ La version utilisée est épinglée à
 
 Fondations disponibles :
 
-- serveur HTTP versionné et client en ligne de commande ;
+- serveur HTTP versionné, client en ligne de commande et panneau de contrôle
+  web local ;
 - protocole RGB24 brut, sans décodage ni composition sur le Raspberry Pi ;
 - file à une seule trame logique : si plusieurs images arrivent pendant un
   rendu, seule la plus récente est conservée ;
@@ -54,6 +55,7 @@ de la gigue sans améliorer la stabilité.
 composition/PNG (client) -> RGB24 -> HTTP -> dernière trame -> Render/VSync
 GIF -> composition/resize client -> paquet RGB24 temporisé -> stockage/lecture
                                                               -> scan GPIO natif
+GUI web -> client Go local -> mêmes commandes HTTP et prétraitements
 ```
 
 ## Protocole HTTP v1
@@ -179,6 +181,37 @@ Les erreurs utilisent `application/problem+json`. Le serveur ne décode ni GIF,
 PNG ou JPEG et ne redimensionne aucune image : ces opérations coûteuses restent
 du côté client. Seul le paquet de trames préparées est compressé pour le
 transfert et le stockage.
+
+## Interface web du client
+
+Le mode GUI lance un panneau de contrôle web sur la machine du client. Il
+réutilise le client Go comme passerelle : le navigateur ne contacte jamais
+directement le Raspberry Pi et le protocole du serveur reste inchangé.
+
+```bash
+go run ./cmd/ledmatrix-client \
+  -server http://192.168.0.18:8080 \
+  -gui
+```
+
+Ouvrir ensuite [http://127.0.0.1:8090](http://127.0.0.1:8090). L’interface
+permet de :
+
+- consulter la connexion, la géométrie, le backend et les statistiques ;
+- choisir les trois horloges et leurs couleurs ;
+- envoyer une couleur, une image PNG/JPEG ou un GIF ;
+- prétraiter, nommer, stocker et lancer un GIF sur le Pi ;
+- relancer une animation persistante en saisissant son nom ;
+- demander l’affichage temporaire des informations techniques.
+
+Les images fixes doivent avoir exactement les dimensions annoncées par le
+serveur. Les GIF conservent leur ratio et sont automatiquement adaptés à cette
+géométrie, comme avec l’option CLI `-gif`.
+
+Par défaut, la GUI écoute uniquement sur la boucle locale. Une autre adresse
+peut être choisie avec `-gui-listen`, par exemple `127.0.0.1:9090`. Le projet
+n’ayant pas encore d’authentification, il est déconseillé de l’exposer avec
+`0.0.0.0` sur un réseau non maîtrisé.
 
 ## Configuration du serveur
 

@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GoLedMatrix Control</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <div>
+        <p class="eyebrow">GOLEDMATRIX2</p>
+        <h1>Matrix control</h1>
+      </div>
+      <div id="connection" class="connection offline">
+        <span class="status-dot"></span>
+        <span id="connection-label">Connexion…</span>
+      </div>
+    </header>
+
+    <section class="matrix-card">
+      <div>
+        <span class="label">Serveur</span>
+        <strong id="backend">—</strong>
+      </div>
+      <div>
+        <span class="label">Matrice</span>
+        <strong id="geometry">—</strong>
+      </div>
+      <div>
+        <span class="label">Format</span>
+        <strong id="format">—</strong>
+      </div>
+      <div>
+        <span class="label">Uptime</span>
+        <strong id="uptime">—</strong>
+      </div>
+      <button id="refresh" class="icon-button" title="Actualiser" aria-label="Actualiser">↻</button>
+    </section>
+
+    <main>
+      <section class="panel clock-panel">
+        <div class="panel-heading">
+          <span class="panel-number">01</span>
+          <div>
+            <h2>Horloge</h2>
+            <p>Choisissez le cadran et ses deux couleurs.</p>
+          </div>
+        </div>
+        <form id="clock-form">
+          <label>Style
+            <select name="mode">
+              <option value="round">Office Round</option>
+              <option value="fancy">Fancy</option>
+              <option value="simple">Simple</option>
+            </select>
+          </label>
+          <div class="color-pair">
+            <label>Couleur principale
+              <input name="color1" type="color" value="#ff8337">
+            </label>
+            <label>Couleur secondaire
+              <input name="color2" type="color" value="#7be0de">
+            </label>
+          </div>
+          <button type="submit">Afficher l’horloge</button>
+        </form>
+      </section>
+
+      <section class="panel color-panel">
+        <div class="panel-heading">
+          <span class="panel-number">02</span>
+          <div>
+            <h2>Couleur unie</h2>
+            <p>Remplissez instantanément toute la matrice.</p>
+          </div>
+        </div>
+        <form id="color-form">
+          <div class="hero-color">
+            <input name="color" type="color" value="#2040ff" aria-label="Couleur">
+            <output id="color-value">#2040ff</output>
+          </div>
+          <button type="submit">Envoyer la couleur</button>
+        </form>
+      </section>
+
+      <section class="panel media-panel">
+        <div class="panel-heading">
+          <span class="panel-number">03</span>
+          <div>
+            <h2>Image</h2>
+            <p>PNG ou JPEG aux dimensions exactes de la matrice.</p>
+          </div>
+        </div>
+        <form id="image-form">
+          <label class="drop-zone">
+            <input name="file" type="file" accept="image/png,image/jpeg" required>
+            <span class="drop-title">Choisir une image</span>
+            <span id="image-file" class="drop-detail">Aucun fichier sélectionné</span>
+          </label>
+          <button type="submit">Afficher l’image</button>
+        </form>
+      </section>
+
+      <section class="panel animation-panel">
+        <div class="panel-heading">
+          <span class="panel-number">04</span>
+          <div>
+            <h2>Animation GIF</h2>
+            <p>Prétraitée ici, stockée puis jouée de façon autonome sur le Pi.</p>
+          </div>
+        </div>
+        <form id="gif-form">
+          <label class="drop-zone">
+            <input name="file" type="file" accept="image/gif" required>
+            <span class="drop-title">Choisir un GIF</span>
+            <span id="gif-file" class="drop-detail">Aucun fichier sélectionné</span>
+          </label>
+          <div class="form-grid">
+            <label>Nom de stockage
+              <input name="name" type="text" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" placeholder="mon-animation">
+            </label>
+            <label>Répétitions
+              <select name="loops">
+                <option value="-1">Valeur du GIF</option>
+                <option value="0">En boucle</option>
+                <option value="1">1 fois</option>
+                <option value="2">2 fois</option>
+                <option value="5">5 fois</option>
+              </select>
+            </label>
+          </div>
+          <button type="submit">Préparer, stocker et lire</button>
+        </form>
+        <div class="divider"><span>ou relancer</span></div>
+        <form id="play-form" class="inline-form">
+          <label class="grow">Animation stockée
+            <input name="name" type="text" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" placeholder="mon-animation" required>
+          </label>
+          <button type="submit">Lire</button>
+        </form>
+      </section>
+
+      <section class="panel tools-panel">
+        <div class="panel-heading">
+          <span class="panel-number">05</span>
+          <div>
+            <h2>Outils</h2>
+            <p>Diagnostic rapide du serveur et de sa connexion.</p>
+          </div>
+        </div>
+        <button id="display-info" type="button" class="secondary">Afficher les informations techniques</button>
+      </section>
+    </main>
+
+    <footer>
+      <span id="activity">Prêt.</span>
+      <span id="stats">0 trame reçue</span>
+    </footer>
+  </div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

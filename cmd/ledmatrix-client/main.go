@@ -9,6 +9,7 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/Djoulzy/GoLedMatrix2/internal/client"
+	"github.com/Djoulzy/GoLedMatrix2/internal/clientgui"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 )
 
@@ -31,6 +33,8 @@ func main() {
 	animationName := flag.String("animation-name", "", "stored animation name (defaults to the GIF filename)")
 	playAnimation := flag.String("play-animation", "", "play a previously stored animation")
 	animationLoops := flag.Int("animation-loops", -1, "total loops: 0 infinite, -1 uses the GIF value")
+	gui := flag.Bool("gui", false, "start the browser-based graphical client")
+	guiListen := flag.String("gui-listen", "127.0.0.1:8090", "GUI HTTP listen address")
 	timeout := flag.Duration("timeout", 2*time.Minute, "HTTP request timeout")
 	flag.Parse()
 
@@ -53,8 +57,11 @@ func main() {
 	if *playAnimation != "" {
 		selectedActions++
 	}
+	if *gui {
+		selectedActions++
+	}
 	if selectedActions != 1 {
-		log.Fatal("provide exactly one of -image, -color, -show-info, -clock, -gif, or -play-animation")
+		log.Fatal("provide exactly one of -image, -color, -show-info, -clock, -gif, -play-animation, or -gui")
 	}
 	if *showClock == "" && (*clockColor1 != "" || *clockColor2 != "") {
 		log.Fatal("-clock-color1 and -clock-color2 require -clock")
@@ -71,6 +78,17 @@ func main() {
 	api, err := client.New(*serverURL, *timeout)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if *gui {
+		handler, err := clientgui.New(api)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("graphical client available at http://%s\n", *guiListen)
+		if err := http.ListenAndServe(*guiListen, handler); err != nil {
+			log.Fatalf("serve graphical client: %v", err)
+		}
+		return
 	}
 	ctx := context.Background()
 	if *showInfo {
