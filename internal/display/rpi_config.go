@@ -11,6 +11,8 @@ type RPIConfig struct {
 	PWMDitherBits          int
 	Brightness             int
 	ScanMode               int
+	RowAddressType         int
+	RGBSequence            string
 	HardwareMapping        string
 	ShowRefreshRate        bool
 	InverseColors          bool

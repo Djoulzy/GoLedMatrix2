@@ -9,8 +9,6 @@ PWMLSBNanoseconds       = 130
 PWMDitherBits           = 0
 Brightness              = 100
 ScanMode                = 0
-RowAddressType          = 3
-RGBSequence             = "RGB"
 HardwareMapping         = "regular"
 ShowRefreshRate         = true
 InverseColors           = false
@@ -29,12 +27,9 @@ DoGpioInit              = true
 Addr                    = "detect"
 Port                    = 8080
 Enabled                 = true
-InfoDisplaySeconds      = 5
 
 [Clock]
-# Valeurs possibles : "simple", "fancy" ou "round".
-DefaultMode             = "simple"
-# Laisser vide pour utiliser les couleurs propres au mode.
+DefaultMode             = "round"
 Color1                  = ""
 Color2                  = ""
 

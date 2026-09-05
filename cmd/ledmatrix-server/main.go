@@ -65,6 +65,8 @@ func parseFlags() (options, error) {
 	pwmDither := flag.Int("pwm-dither-bits", defaults.Hardware.PWMDitherBits, "native PWM time dithering bits")
 	brightness := flag.Int("brightness", defaults.Hardware.Brightness, "panel brightness (1-100)")
 	scanMode := flag.Int("scan-mode", defaults.Hardware.ScanMode, "scan mode: 0 progressive, 1 interlaced")
+	rowAddressType := flag.Int("row-addr-type", defaults.Hardware.RowAddressType, "native row address type (0-5)")
+	rgbSequence := flag.String("rgb-sequence", defaults.Hardware.RGBSequence, "physical LED color order (permutation of RGB)")
 	mapping := flag.String("hardware-mapping", defaults.Hardware.HardwareMapping, "GPIO hardware mapping")
 	showRefresh := flag.Bool("show-refresh", defaults.Hardware.ShowRefreshRate, "print native refresh rate")
 	inverseColors := flag.Bool("inverse-colors", defaults.Hardware.InverseColors, "invert panel colors")
@@ -111,6 +113,10 @@ func parseFlags() (options, error) {
 			settings.Hardware.Brightness = *brightness
 		case "scan-mode":
 			settings.Hardware.ScanMode = *scanMode
+		case "row-addr-type":
+			settings.Hardware.RowAddressType = *rowAddressType
+		case "rgb-sequence":
+			settings.Hardware.RGBSequence = *rgbSequence
 		case "hardware-mapping":
 			settings.Hardware.HardwareMapping = *mapping
 		case "show-refresh":
@@ -474,7 +480,9 @@ func rpiConfig(hardware appconfig.HardwareConfig, runtime appconfig.RuntimeOptio
 		ChainLength: hardware.ChainLength, Parallel: hardware.Parallel,
 		PWMBits: hardware.PWMBits, PWMLSBNanoseconds: hardware.PWMLSBNanoseconds,
 		PWMDitherBits: hardware.PWMDitherBits, Brightness: hardware.Brightness,
-		ScanMode: hardware.ScanMode, HardwareMapping: hardware.HardwareMapping,
+		ScanMode: hardware.ScanMode, RowAddressType: hardware.RowAddressType,
+		RGBSequence:     hardware.RGBSequence,
+		HardwareMapping: hardware.HardwareMapping,
 		ShowRefreshRate: hardware.ShowRefreshRate, InverseColors: hardware.InverseColors,
 		DisableHardwarePulsing: hardware.DisableHardwarePulsing,
 		PixelMapperConfig:      hardware.PixelMapperConfig,

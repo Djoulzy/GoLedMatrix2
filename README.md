@@ -237,6 +237,8 @@ PWMLSBNanoseconds       = 130
 PWMDitherBits           = 0
 Brightness              = 100
 ScanMode                = 0
+RowAddressType          = 0
+RGBSequence             = "RGB"
 HardwareMapping         = "regular"
 ShowRefreshRate         = true
 InverseColors           = false
@@ -307,6 +309,25 @@ rester compatibles avec le fichier initial, mais ne sont pas transmis au
 wrapper pour le moment. Seul `GpioSlowdown` est appliqué depuis
 `RuntimeOptions`. Le fonctionnement en service sera pris en charge par
 `systemd`.
+
+`RowAddressType` correspond directement à l’option native
+`--led-row-addr-type` de `rpi-rgb-led-matrix`. Les valeurs acceptées sont :
+
+- `0` : adressage direct standard (valeur par défaut) ;
+- `1` : panneaux adressés par lignes A/B avec registre à décalage ;
+- `2` : sélection directe d’une ligne ABCD ;
+- `3` : adressage ABC avec registre à décalage ;
+- `4` : adressage ABC décalé avec D/E directs (SM5266) ;
+- `5` : adressage par registre B707, variante souvent plus rapide que `3`.
+
+Ce réglage est transmis uniquement au backend matériel. Il ne modifie ni la
+géométrie ni le rendu du simulateur.
+
+`RGBSequence` correspond à `--led-rgb-sequence` et corrige l’ordre physique des
+canaux lorsqu’une dalle mélange les couleurs. Sa valeur doit être une
+permutation de `RGB`, par exemple `RGB` (défaut), `BGR` ou `GRB`. Ce paramètre
+est lui aussi propre au backend matériel ; les trames HTTP restent toujours au
+format RGB24 standard.
 
 ## Développement sur macOS ou Linux
 
@@ -452,6 +473,10 @@ Options utiles du serveur :
   au prix de la profondeur de couleur ;
 - `-pwm-lsb-ns 130`
 - `-pwm-dither-bits 0..2`
+- `-row-addr-type 0..5` : méthode native d’adressage des lignes
+  (`--led-row-addr-type`) ; `0` convient aux panneaux à adressage direct ;
+- `-rgb-sequence RGB` : ordre physique des canaux LED
+  (`--led-rgb-sequence`) ; accepte toute permutation de `RGB` ;
 - `-gpio-slowdown 0..60`
 - `-pixel-mapper V-mapper`
 - `-limit-refresh 70`

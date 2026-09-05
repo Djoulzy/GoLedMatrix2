@@ -15,6 +15,8 @@ Cols = 64
 ChainLength = 4
 Parallel = 2
 PWMDitherBits = 2
+RowAddressType = 5
+RGBSequence = "bGr"
 PixelMapperConfig = "V-mapper"
 LimitRefreshRateHz = 70
 
@@ -41,6 +43,12 @@ MaxUploadMB = 64
 	}
 	if loaded.Hardware.PWMBits != 11 {
 		t.Fatalf("omitted PWMBits = %d, want default 11", loaded.Hardware.PWMBits)
+	}
+	if loaded.Hardware.RowAddressType != 5 {
+		t.Fatalf("RowAddressType = %d, want 5", loaded.Hardware.RowAddressType)
+	}
+	if loaded.Hardware.RGBSequence != "bGr" {
+		t.Fatalf("RGBSequence = %q, want bGr", loaded.Hardware.RGBSequence)
 	}
 	if loaded.Runtime.GPIOSlowdown != 5 {
 		t.Fatalf("GpioSlowdown = %d, want 5", loaded.Runtime.GPIOSlowdown)
@@ -87,6 +95,36 @@ func TestValidateRejectsInvalidInfoDisplayDuration(t *testing.T) {
 	config.HTTP.InfoDisplaySeconds = 61
 	if err := config.Validate(); err == nil {
 		t.Fatal("expected validation error")
+	}
+}
+
+func TestValidateRejectsInvalidRowAddressType(t *testing.T) {
+	config := Default()
+	config.Hardware.RowAddressType = 6
+	if err := config.Validate(); err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestValidateRGBSequence(t *testing.T) {
+	for _, sequence := range []string{"RGB", "RBG", "GRB", "GBR", "BRG", "BGR", "bGr"} {
+		t.Run(sequence, func(t *testing.T) {
+			config := Default()
+			config.Hardware.RGBSequence = sequence
+			if err := config.Validate(); err != nil {
+				t.Fatalf("valid sequence rejected: %v", err)
+			}
+		})
+	}
+
+	for _, sequence := range []string{"", "RG", "RGBB", "RRB", "XYZ"} {
+		t.Run("invalid_"+sequence, func(t *testing.T) {
+			config := Default()
+			config.Hardware.RGBSequence = sequence
+			if err := config.Validate(); err == nil {
+				t.Fatalf("invalid sequence %q accepted", sequence)
+			}
+		})
 	}
 }
 

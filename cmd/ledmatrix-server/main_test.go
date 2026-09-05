@@ -15,22 +15,24 @@ func TestRPIConfigMapsSupportedFileSettings(t *testing.T) {
 	hardware := appconfig.HardwareConfig{
 		Rows: 1, Cols: 2, ChainLength: 3, Parallel: 4,
 		PWMBits: 5, PWMLSBNanoseconds: 6, PWMDitherBits: 7,
-		Brightness: 8, ScanMode: 9, HardwareMapping: "mapping",
+		Brightness: 8, ScanMode: 9, RowAddressType: 5, RGBSequence: "BGR",
+		HardwareMapping: "mapping",
 		ShowRefreshRate: true, InverseColors: true,
 		DisableHardwarePulsing: true, PixelMapperConfig: "mapper",
-		LimitRefreshRateHz: 10, Multiplexing: 11,
+		LimitRefreshRateHz: 11, Multiplexing: 12,
 	}
 	runtime := appconfig.RuntimeOptions{
-		GPIOSlowdown: 12, Daemon: 13, DropPrivileges: 14, DoGPIOInit: true,
+		GPIOSlowdown: 13, Daemon: 14, DropPrivileges: 15, DoGPIOInit: true,
 	}
 	want := display.RPIConfig{
 		Rows: 1, Cols: 2, ChainLength: 3, Parallel: 4,
 		PWMBits: 5, PWMLSBNanoseconds: 6, PWMDitherBits: 7,
-		Brightness: 8, ScanMode: 9, HardwareMapping: "mapping",
+		Brightness: 8, ScanMode: 9, RowAddressType: 5, RGBSequence: "BGR",
+		HardwareMapping: "mapping",
 		ShowRefreshRate: true, InverseColors: true,
 		DisableHardwarePulsing: true, PixelMapperConfig: "mapper",
-		LimitRefreshRateHz: 10, Multiplexing: 11,
-		GPIOSlowdown: 12,
+		LimitRefreshRateHz: 11, Multiplexing: 12,
+		GPIOSlowdown: 13,
 	}
 	if got := rpiConfig(hardware, runtime); !reflect.DeepEqual(got, want) {
 		t.Fatalf("RPI config = %+v, want %+v", got, want)

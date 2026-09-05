@@ -30,6 +30,8 @@ type HardwareConfig struct {
 	PWMDitherBits          int    `toml:"PWMDitherBits"`
 	Brightness             int    `toml:"Brightness"`
 	ScanMode               int    `toml:"ScanMode"`
+	RowAddressType         int    `toml:"RowAddressType"`
+	RGBSequence            string `toml:"RGBSequence"`
 	HardwareMapping        string `toml:"HardwareMapping"`
 	ShowRefreshRate        bool   `toml:"ShowRefreshRate"`
 	InverseColors          bool   `toml:"InverseColors"`
@@ -69,7 +71,7 @@ func Default() Config {
 		Hardware: HardwareConfig{
 			Rows: 32, Cols: 64, ChainLength: 1, Parallel: 1,
 			PWMBits: 11, PWMLSBNanoseconds: 130, Brightness: 100,
-			HardwareMapping: "regular",
+			RGBSequence: "RGB", HardwareMapping: "regular",
 		},
 		Runtime: RuntimeOptions{
 			GPIOSlowdown: 1, Daemon: 0, DropPrivileges: -1, DoGPIOInit: true,
@@ -122,6 +124,10 @@ func (c Config) Validate() error {
 		return errors.New("HardwareConfig.Brightness must be between 1 and 100")
 	case hardware.ScanMode < 0 || hardware.ScanMode > 1:
 		return errors.New("HardwareConfig.ScanMode must be 0 or 1")
+	case hardware.RowAddressType < 0 || hardware.RowAddressType > 5:
+		return errors.New("HardwareConfig.RowAddressType must be between 0 and 5")
+	case !validRGBSequence(hardware.RGBSequence):
+		return errors.New("HardwareConfig.RGBSequence must be a permutation of RGB")
 	case hardware.HardwareMapping == "":
 		return errors.New("HardwareConfig.HardwareMapping must not be empty")
 	case hardware.LimitRefreshRateHz < 0:
@@ -158,6 +164,12 @@ func (c Config) Validate() error {
 		return errors.New("Animations.MaxUploadMB must be between 1 and 1024")
 	}
 	return nil
+}
+
+func validRGBSequence(value string) bool {
+	value = strings.ToUpper(value)
+	return len(value) == 3 && strings.Contains(value, "R") &&
+		strings.Contains(value, "G") && strings.Contains(value, "B")
 }
 
 func (c HTTPServer) ListenAddress() (string, error) {

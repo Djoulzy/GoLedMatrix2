@@ -31,11 +31,12 @@ func NewRPI(config RPIConfig) (Display, error) {
 		ShowRefreshRate:        config.ShowRefreshRate,
 		LimitRefresh:           config.LimitRefreshRateHz,
 		ScanMode:               rgbmatrix.ScanMode(config.ScanMode),
+		RowAddressType:         config.RowAddressType,
 		PWMLSBNanoseconds:      config.PWMLSBNanoseconds,
 		PWMDitherBits:          config.PWMDitherBits,
 		DisableHardwarePulsing: config.DisableHardwarePulsing,
 		InverseColors:          config.InverseColors,
-		RGBSequence:            "RGB",
+		RGBSequence:            config.RGBSequence,
 	}
 	runtime := &rgbmatrix.RuntimeConfig{GPIOSlowdown: config.GPIOSlowdown}
 	matrix, err := rgbmatrix.NewRGBLedMatrix(hardware, runtime)
