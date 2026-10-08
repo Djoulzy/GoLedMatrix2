@@ -1,7 +1,7 @@
 [HardwareConfig]
-Rows                    = 32
-Cols                    = 64
-ChainLength             = 4
+Rows                    = 64
+Cols                    = 128
+ChainLength             = 1
 Parallel                = 2
 
 PWMBits                 = 11
@@ -10,13 +10,13 @@ PWMDitherBits           = 0
 Brightness              = 100
 ScanMode                = 0
 RowAddressType          = 0
-RGBSequence             = "RGB"
+RGBSequence             = "BRG"
 HardwareMapping         = "regular"
-ShowRefreshRate         = true
+ShowRefreshRate         = false
 InverseColors           = false
 DisableHardwarePulsing  = false
-PixelMapperConfig       = "V-mapper"
-LimitRefreshRateHz      = 70
+#PixelMapperConfig       = "V-mapper"
+#LimitRefreshRateHz      = 70
 Multiplexing            = 0
 
 [RuntimeOptions]

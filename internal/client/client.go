@@ -14,6 +14,7 @@ import (
 
 	"github.com/Djoulzy/GoLedMatrix2/internal/animation"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
+	"github.com/Djoulzy/GoLedMatrix2/internal/marquee"
 	"github.com/Djoulzy/GoLedMatrix2/internal/server"
 )
 
@@ -118,6 +119,33 @@ func (c *Client) DisplayClock(ctx context.Context, mode, color1, color2 string) 
 		return responseError(resp)
 	}
 	return nil
+}
+
+// DisplayMarquee starts autonomous scrolling on the server, which continues
+// after the client disconnects. The returned settings include server defaults.
+func (c *Client) DisplayMarquee(ctx context.Context, options marquee.Options) (marquee.Options, error) {
+	var state marquee.Options
+	body, err := json.Marshal(options)
+	if err != nil {
+		return state, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("/v1/marquee"), bytes.NewReader(body))
+	if err != nil {
+		return state, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return state, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		return state, responseError(resp)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+		return state, fmt.Errorf("decode marquee response: %w", err)
+	}
+	return state, nil
 }
 
 func (c *Client) UploadAnimation(

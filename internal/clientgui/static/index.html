@@ -90,12 +90,12 @@
           <span class="panel-number">03</span>
           <div>
             <h2>Image</h2>
-            <p>PNG ou JPEG aux dimensions exactes de la matrice.</p>
+            <p>PNG, JPEG ou HEIC. Proportions conservées, recadrage centré pour remplir la matrice.</p>
           </div>
         </div>
         <form id="image-form">
           <label class="drop-zone">
-            <input name="file" type="file" accept="image/png,image/jpeg" required>
+            <input name="file" type="file" accept="image/png,image/jpeg,image/heic,image/heif,.png,.jpg,.jpeg,.heic,.heif" required>
             <span class="drop-title">Choisir une image</span>
             <span id="image-file" class="drop-detail">Aucun fichier sélectionné</span>
           </label>
@@ -142,9 +142,59 @@
         </form>
       </section>
 
-      <section class="panel tools-panel">
+      <section class="panel marquee-panel">
         <div class="panel-heading">
           <span class="panel-number">05</span>
+          <div>
+            <h2>Texte défilant</h2>
+            <p>Défile de droite à gauche en boucle sur le serveur.</p>
+          </div>
+        </div>
+        <form id="marquee-form">
+          <label>Texte
+            <input name="text" type="text" maxlength="4096" placeholder="Bonjour à tous !" required>
+          </label>
+          <div class="form-grid">
+            <label>Police
+              <select name="font">
+                <option value="regular">Go Regular</option>
+                <option value="bold">Go Bold</option>
+                <option value="mono">Go Mono</option>
+              </select>
+            </label>
+            <label>Taille (pixels)
+              <input name="size" type="number" min="2" max="256" value="16" required>
+            </label>
+          </div>
+          <div class="form-grid">
+            <label>Couleur fixe
+              <input name="color" type="color" value="#ffffff">
+            </label>
+            <label>Vitesse (pixels / seconde)
+              <input name="speed" type="number" min="1" max="500" step="0.1" value="30" required>
+            </label>
+          </div>
+          <label>Cycle de couleurs
+            <select name="cycle" id="marquee-cycle">
+              <option value="none">Couleur fixe</option>
+              <option value="rainbow">Arc-en-ciel</option>
+              <option value="custom">Palette personnalisée</option>
+            </select>
+          </label>
+          <label id="marquee-palette-field" hidden>Palette (2 à 16 couleurs séparées par des virgules)
+            <input name="palette" type="text" value="#ff8337,#7be0de" placeholder="#ff0000,#00ff00,#0000ff">
+          </label>
+          <label id="marquee-period-field" hidden>Durée du cycle complet (secondes)
+            <input name="cycle_seconds" type="number" min="0.1" max="3600" step="0.1" value="6">
+          </label>
+          <button type="submit">Faire défiler le texte</button>
+          <p class="form-hint">Pour arrêter le texte, affichez une horloge, une couleur, une image ou une animation.</p>
+        </form>
+      </section>
+
+      <section class="panel tools-panel">
+        <div class="panel-heading">
+          <span class="panel-number">06</span>
           <div>
             <h2>Outils</h2>
             <p>Diagnostic rapide du serveur et de sa connexion.</p>

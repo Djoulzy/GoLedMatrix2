@@ -3,8 +3,10 @@ package clientgui
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"image"
 	"image/color"
+	"image/draw"
 	"image/gif"
 	"image/png"
 	"mime/multipart"
@@ -15,6 +17,7 @@ import (
 
 	"github.com/Djoulzy/GoLedMatrix2/internal/animation"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
+	"github.com/Djoulzy/GoLedMatrix2/internal/marquee"
 	"github.com/Djoulzy/GoLedMatrix2/internal/server"
 )
 
@@ -69,6 +72,64 @@ func TestColorAndClockCommands(t *testing.T) {
 	}
 }
 
+func TestMarqueeCommand(t *testing.T) {
+	matrix := &fakeMatrixClient{info: testInfo()}
+	handler := newHandler(matrix)
+	request := httptest.NewRequest(http.MethodPost, "/api/marquee", bytes.NewBufferString(
+		`{"text":"Bonjour à tous !","font":"bold","size":20,"color":"#abcdef","speed":45,"color_cycle":["#ff0000","#00ff00"],"cycle_seconds":3}`,
+	))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("marquee response = %d %s", response.Code, response.Body)
+	}
+	got := matrix.marquee
+	if got.Text != "Bonjour à tous !" || got.Font != "bold" || got.Size != 20 || got.Color != "#ABCDEF" || got.Speed != 45 || len(got.ColorCycle) != 2 || got.CycleSeconds != 3 {
+		t.Fatalf("marquee command lost settings: %+v", got)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/api/marquee", bytes.NewBufferString(`{"text":"test","size":-1}`))
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || matrix.marquee.Text != got.Text {
+		t.Fatalf("invalid command forwarded: %d %s", response.Code, response.Body)
+	}
+}
+
+func TestMarqueeFontCatalogueAndAssetCommand(t *testing.T) {
+	matrix := &fakeMatrixClient{info: testInfo()}
+	handler := newHandler(matrix)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/marquee/fonts", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("catalogue = %d %s", response.Code, response.Body)
+	}
+	var fonts []marquee.Font
+	if err := json.Unmarshal(response.Body.Bytes(), &fonts); err != nil {
+		t.Fatal(err)
+	}
+	var hasFlashback, hasOTF bool
+	for _, font := range fonts {
+		if font.Name == "marquee/Flashback.ttf" && font.Category == "marquee" {
+			hasFlashback = true
+		}
+		if font.Name == "fixed/Pixel_NES.otf" && font.Category == "fixed" {
+			hasOTF = true
+		}
+	}
+	if !hasFlashback || !hasOTF {
+		t.Fatal("catalogue is missing bundled TTF or OTF fonts")
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/marquee", bytes.NewBufferString(`{"text":"Hello","font":"Flashback"}`))
+	request.Header.Set("Content-Type", "application/json")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || matrix.marquee.Font != "marquee/Flashback.ttf" {
+		t.Fatalf("asset font command = %d %s, font %q", response.Code, response.Body, matrix.marquee.Font)
+	}
+}
+
 func TestImageUpload(t *testing.T) {
 	matrix := &fakeMatrixClient{info: testInfo()}
 	handler := newHandler(matrix)
@@ -91,6 +152,26 @@ func TestImageUpload(t *testing.T) {
 	}
 	if !bytes.Equal(matrix.sent.Pixels, []byte{1, 2, 3, 4, 5, 6}) {
 		t.Fatalf("image pixels = %v", matrix.sent.Pixels)
+	}
+}
+
+func TestImageUploadResizesAndCropsCenter(t *testing.T) {
+	matrix := &fakeMatrixClient{info: testInfo()}
+	handler := newHandler(matrix)
+	source := image.NewRGBA(image.Rect(0, 0, 6, 1))
+	draw.Draw(source, source.Bounds(), image.NewUniform(color.RGBA{R: 255, A: 255}), image.Point{}, draw.Src)
+	draw.Draw(source, image.Rect(2, 0, 4, 1), image.NewUniform(color.RGBA{G: 255, A: 255}), image.Point{}, draw.Src)
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, source); err != nil {
+		t.Fatal(err)
+	}
+	body, contentType := multipartBody(t, "photo.png", encoded.Bytes(), nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/image", body)
+	request.Header.Set("Content-Type", contentType)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || matrix.sent.Width != 2 || matrix.sent.Height != 1 || !bytes.Equal(matrix.sent.Pixels, []byte{0, 255, 0, 0, 255, 0}) {
+		t.Fatalf("resized image response = %d %s, frame %+v", response.Code, response.Body, matrix.sent)
 	}
 }
 
@@ -180,6 +261,7 @@ type fakeMatrixClient struct {
 	clockMode   string
 	clockColor1 string
 	clockColor2 string
+	marquee     marquee.Options
 
 	uploadName string
 	upload     animation.Bundle
@@ -202,6 +284,11 @@ func (f *fakeMatrixClient) DisplayInfo(context.Context) error {
 func (f *fakeMatrixClient) DisplayClock(_ context.Context, mode, color1, color2 string) error {
 	f.clockMode, f.clockColor1, f.clockColor2 = mode, color1, color2
 	return nil
+}
+
+func (f *fakeMatrixClient) DisplayMarquee(_ context.Context, options marquee.Options) (marquee.Options, error) {
+	f.marquee = options
+	return options, nil
 }
 
 func (f *fakeMatrixClient) UploadAnimation(

@@ -1,7 +1,12 @@
 // Package assets embeds runtime assets required by the server.
 package assets
 
-import _ "embed"
+import "embed"
+
+// FontFiles contains every bundled TTF and OTF font, including subdirectories.
+//
+//go:embed ttf
+var FontFiles embed.FS
 
 //go:embed ttf/digital/TickingTimebomb.ttf
 var OfficeRoundFont []byte

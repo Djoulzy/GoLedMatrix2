@@ -3,6 +3,7 @@ package client
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/Djoulzy/GoLedMatrix2/internal/animation"
 	"github.com/Djoulzy/GoLedMatrix2/internal/display"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
+	"github.com/Djoulzy/GoLedMatrix2/internal/marquee"
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
 	"github.com/Djoulzy/GoLedMatrix2/internal/server"
 )
@@ -78,6 +80,39 @@ func TestDisplayClock(t *testing.T) {
 	}
 	if method != http.MethodPost || path != "/v1/clock?color1=%23112233&color2=%23AABBCC&mode=round" {
 		t.Fatalf("request = %s %s", method, path)
+	}
+}
+
+func TestDisplayMarquee(t *testing.T) {
+	api, err := New("http://matrix.test", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := marquee.Options{Text: "Été & hiver ?", Font: "mono", Size: 18, Color: "#123456", Speed: 40,
+		ColorCycle: []string{"#FF0000", "#00FF00"}, CycleSeconds: 3}
+	api.http.Transport = handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/marquee" || r.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("request = %s %s", r.Method, r.URL)
+		}
+		var got marquee.Options
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got.Text != options.Text || got.Font != options.Font || got.Size != options.Size || got.Color != options.Color || got.Speed != options.Speed || len(got.ColorCycle) != 2 || got.CycleSeconds != 3 {
+			t.Fatalf("sent settings = %+v", got)
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(got)
+	})}
+	state, err := api.DisplayMarquee(context.Background(), options)
+	if err != nil || state.Text != options.Text || state.Font != options.Font {
+		t.Fatalf("marquee state = %+v, %v", state, err)
+	}
+	api.http.Transport = handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "invalid text", http.StatusBadRequest)
+	})}
+	if _, err := api.DisplayMarquee(context.Background(), options); err == nil {
+		t.Fatal("server error ignored")
 	}
 }
 

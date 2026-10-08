@@ -8,10 +8,12 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/Djoulzy/GoLedMatrix2/internal/animation"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
+	"github.com/Djoulzy/GoLedMatrix2/internal/marquee"
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
 )
 
@@ -31,6 +33,8 @@ type API struct {
 	clockDisplay      func(ClockSelection) (ClockState, error)
 	animations        *animation.Player
 	maxAnimationBytes int64
+	marquee           *marquee.Player
+	displayMu         sync.Mutex
 }
 
 type Info struct {
@@ -103,6 +107,16 @@ func WithAnimations(player *animation.Player, maxUploadBytes int64) Option {
 	}
 }
 
+func WithMarquee(player *marquee.Player) Option {
+	return func(api *API) error {
+		if player == nil {
+			return errors.New("marquee player is required")
+		}
+		api.marquee = player
+		return nil
+	}
+}
+
 func New(width, height int, backend string, renderer *render.Renderer, options ...Option) (*API, error) {
 	frameSize, err := frame.ByteLen(width, height)
 	if err != nil {
@@ -130,6 +144,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/frame", a.putFrame)
 	mux.HandleFunc("POST /v1/display-info", a.displayInfo)
 	mux.HandleFunc("POST /v1/clock", a.displayClock)
+	mux.HandleFunc("POST /v1/marquee", a.displayMarquee)
 	mux.HandleFunc("PUT /v1/animations/{name}", a.putAnimation)
 	mux.HandleFunc("POST /v1/animations/{name}/play", a.playAnimation)
 	return mux
@@ -187,6 +202,8 @@ func (a *API) displayClock(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusServiceUnavailable, "clock unavailable", "clock display is disabled")
 		return
 	}
+	a.displayMu.Lock()
+	defer a.displayMu.Unlock()
 	state, err := a.clockDisplay(ClockSelection{
 		Mode:   r.URL.Query().Get("mode"),
 		Color1: r.URL.Query().Get("color1"),
@@ -200,7 +217,51 @@ func (a *API) displayClock(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusServiceUnavailable, "clock unavailable", "clock controller returned no active mode")
 		return
 	}
+	if a.marquee != nil {
+		a.marquee.Stop()
+		// Restore after Stop so a final marquee frame cannot hide the clock.
+		if err := a.renderer.ActivateDefault(); err != nil {
+			writeProblem(w, http.StatusServiceUnavailable, "clock unavailable", err.Error())
+			return
+		}
+	}
 	writeJSON(w, http.StatusAccepted, state)
+}
+
+func (a *API) displayMarquee(w http.ResponseWriter, r *http.Request) {
+	if a.marquee == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "marquee unavailable", "marquee display is disabled")
+		return
+	}
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeProblem(w, http.StatusUnsupportedMediaType, "unsupported media type", "Content-Type must be application/json")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var options marquee.Options
+	if err := decoder.Decode(&options); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid marquee parameters", err.Error())
+		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		writeProblem(w, http.StatusBadRequest, "invalid marquee parameters", "body must contain one JSON object")
+		return
+	}
+	text, err := marquee.New(a.width, a.height, options)
+	if err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid marquee parameters", err.Error())
+		return
+	}
+	a.displayMu.Lock()
+	defer a.displayMu.Unlock()
+	if a.animations != nil {
+		a.animations.Stop()
+	}
+	a.marquee.Play(text)
+	writeJSON(w, http.StatusAccepted, text.Options())
 }
 
 func (a *API) putFrame(w http.ResponseWriter, r *http.Request) {
@@ -225,6 +286,11 @@ func (a *API) putFrame(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeProblem(w, http.StatusBadRequest, "invalid frame", err.Error())
 		return
+	}
+	a.displayMu.Lock()
+	defer a.displayMu.Unlock()
+	if a.marquee != nil {
+		a.marquee.Stop()
 	}
 	if a.animations != nil {
 		a.animations.Stop()
@@ -258,7 +324,9 @@ func (a *API) putAnimation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Query().Get("play") != "false" {
-		metadata, err = a.animations.Play(metadata.Name)
+		a.displayMu.Lock()
+		defer a.displayMu.Unlock()
+		metadata, err = a.animations.PlayReplacing(metadata.Name, a.stopMarquee)
 		if err != nil {
 			writeProblem(w, http.StatusInternalServerError, "unable to play animation", err.Error())
 			return
@@ -272,12 +340,20 @@ func (a *API) playAnimation(w http.ResponseWriter, r *http.Request) {
 		writeProblem(w, http.StatusServiceUnavailable, "animations unavailable", "animation storage is disabled")
 		return
 	}
-	metadata, err := a.animations.Play(r.PathValue("name"))
+	a.displayMu.Lock()
+	defer a.displayMu.Unlock()
+	metadata, err := a.animations.PlayReplacing(r.PathValue("name"), a.stopMarquee)
 	if err != nil {
 		writeProblem(w, http.StatusNotFound, "animation unavailable", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, metadata)
+}
+
+func (a *API) stopMarquee() {
+	if a.marquee != nil {
+		a.marquee.Stop()
+	}
 }
 
 func writeProblem(w http.ResponseWriter, status int, title, detail string) {

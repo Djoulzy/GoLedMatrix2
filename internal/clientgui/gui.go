@@ -8,10 +8,6 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"image"
-	_ "image/jpeg"
-	_ "image/png"
 	"io"
 	"net/http"
 	"strconv"
@@ -20,6 +16,7 @@ import (
 	"github.com/Djoulzy/GoLedMatrix2/internal/animation"
 	"github.com/Djoulzy/GoLedMatrix2/internal/client"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
+	"github.com/Djoulzy/GoLedMatrix2/internal/marquee"
 	"github.com/Djoulzy/GoLedMatrix2/internal/server"
 )
 
@@ -33,6 +30,7 @@ type matrixClient interface {
 	Send(context.Context, frame.Frame) (uint64, error)
 	DisplayInfo(context.Context) error
 	DisplayClock(context.Context, string, string, string) error
+	DisplayMarquee(context.Context, marquee.Options) (marquee.Options, error)
 	UploadAnimation(context.Context, string, animation.Bundle, bool) (animation.Metadata, error)
 	PlayAnimation(context.Context, string) (animation.Metadata, error)
 }
@@ -57,6 +55,8 @@ func newHandler(api matrixClient) http.Handler {
 	mux.HandleFunc("POST /api/color", gui.color)
 	mux.HandleFunc("POST /api/image", gui.image)
 	mux.HandleFunc("POST /api/clock", gui.clock)
+	mux.HandleFunc("POST /api/marquee", gui.marquee)
+	mux.HandleFunc("GET /api/marquee/fonts", marqueeFonts)
 	mux.HandleFunc("POST /api/display-info", gui.displayInfo)
 	mux.HandleFunc("POST /api/animations", gui.uploadAnimation)
 	mux.HandleFunc("POST /api/animations/play", gui.playAnimation)
@@ -128,28 +128,13 @@ func (g *GUI) image(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "Impossible de joindre le serveur LED", err)
 		return
 	}
-	config, _, err := image.DecodeConfig(file)
+	next, err := client.PrepareImage(r.Context(), file, info.Width, info.Height)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "Image PNG ou JPEG invalide", err)
-		return
-	}
-	if config.Width != info.Width || config.Height != info.Height {
-		writeError(w, http.StatusBadRequest, "Dimensions incorrectes",
-			fmt.Errorf("image %dx%d, dimensions attendues %dx%d", config.Width, config.Height, info.Width, info.Height))
-		return
-	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		writeError(w, http.StatusInternalServerError, "Lecture de l’image impossible", err)
-		return
-	}
-	source, _, err := image.Decode(file)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Image PNG ou JPEG invalide", err)
-		return
-	}
-	next, err := frame.FromImage(source)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "Image invalide", err)
+		status := http.StatusBadRequest
+		if errors.Is(err, client.ErrHEICUnavailable) {
+			status = http.StatusServiceUnavailable
+		}
+		writeError(w, status, "Préparation de l’image PNG, JPEG ou HEIC impossible", err)
 		return
 	}
 	sequence, err := g.client.Send(r.Context(), next)
@@ -183,6 +168,35 @@ func (g *GUI) displayInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+}
+
+func (g *GUI) marquee(w http.ResponseWriter, r *http.Request) {
+	var options marquee.Options
+	if err := decodeJSON(r, &options); err != nil {
+		writeError(w, http.StatusBadRequest, "Paramètres de texte défilant invalides", err)
+		return
+	}
+	// Validate before forwarding so form errors are reported as 400, not 502.
+	text, err := marquee.New(1, 1, options)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "Paramètres de texte défilant invalides", err)
+		return
+	}
+	state, err := g.client.DisplayMarquee(r.Context(), text.Options())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "Activation du texte défilant impossible", err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, state)
+}
+
+func marqueeFonts(w http.ResponseWriter, _ *http.Request) {
+	fonts, err := marquee.Fonts()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Catalogue de polices indisponible", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, fonts)
 }
 
 func (g *GUI) uploadAnimation(w http.ResponseWriter, r *http.Request) {

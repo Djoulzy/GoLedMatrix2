@@ -142,6 +142,62 @@ go run ./cmd/ledmatrix-client \
   -clock-color2 '#ffffff'
 ```
 
+### `POST /v1/marquee`
+
+Lance un texte défilant de droite à gauche, centré verticalement sur fond noir.
+Le serveur le rend à 30 images/seconde et le répète après sa sortie complète à
+gauche, même lorsque le client est fermé. Toutes les polices `.ttf` et `.otf`
+présentes dans `assets/ttf` sont intégrées aux exécutables, en plus de Go Regular,
+Go Bold et Go Mono ; aucun fichier de police n'est requis sur le Raspberry Pi.
+
+Le corps utilise `Content-Type: application/json` :
+
+```json
+{
+  "text": "Bonjour à tous !",
+  "font": "regular",
+  "size": 16,
+  "color": "#FFFFFF",
+  "speed": 30,
+  "color_cycle": ["#FF0000", "#00FF00", "#0000FF"],
+  "cycle_seconds": 6
+}
+```
+
+Seul `text` est obligatoire : une ligne UTF-8 de 4096 octets maximum. Les
+autres paramètres prennent les valeurs par défaut ci-dessus, sauf
+`color_cycle`, vide par défaut (couleur fixe). `font` accepte un nom de police
+(par exemple `Flashback`, `Perform` ou `Pixel_NES`), son chemin relatif à
+`assets/ttf` (par exemple `marquee/Flashback.ttf`), ainsi que `regular`, `bold`
+ou `mono`. Les noms sont insensibles à la casse ; en cas de doublon, utiliser
+le chemin relatif. `size` est une taille en pixels de 2 à 256 ; un texte plus haut que
+la matrice est rogné. `speed` va de 1 à 500 pixels/seconde. Le cycle contient
+2 à 16 couleurs `#RRGGBB` et effectue des transitions progressives sur une
+période complète de `cycle_seconds` secondes (0,1 à 3600). La réponse est
+`202 Accepted` avec les réglages effectivement appliqués.
+
+```bash
+# Catalogue local complet, sans connexion au serveur
+./bin/ledmatrix-client -list-marquee-fonts
+
+./bin/ledmatrix-client -server http://192.168.0.18:8080 \
+  -marquee 'Bonjour à tous !' \
+  -marquee-font Flashback -marquee-size 20 \
+  -marquee-color '#ff8337' -marquee-speed 40
+
+./bin/ledmatrix-client -server http://192.168.0.18:8080 \
+  -marquee 'Un texte arc-en-ciel' \
+  -marquee-cycle rainbow -marquee-cycle-seconds 6
+
+./bin/ledmatrix-client -server http://192.168.0.18:8080 \
+  -marquee 'Une palette personnalisée' \
+  -marquee-cycle '#ff8337,#7be0de,#ffffff' -marquee-cycle-seconds 4
+```
+
+Un nouveau marquee, une image/couleur, une animation ou l'horloge remplace le
+défilement actif. Une requête invalide conserve l'affichage en cours. L'écran
+technique est temporaire : le défilement continue et réapparaît à son expiration.
+
 ### `PUT /v1/animations/{name}`
 
 Stocke une animation prétraitée au format
@@ -173,12 +229,12 @@ go run ./cmd/ledmatrix-client \
   -play-animation demo
 ```
 
-Une trame client, une autre animation ou le retour à l’horloge interrompt la
+Une trame client, un marquee, une autre animation ou le retour à l’horloge interrompt la
 lecture active. L’écran technique reste temporaire et restaure ensuite le mode
 actif.
 
 Les erreurs utilisent `application/problem+json`. Le serveur ne décode ni GIF,
-PNG ou JPEG et ne redimensionne aucune image : ces opérations coûteuses restent
+PNG, JPEG ou HEIC et ne redimensionne aucune image : ces opérations coûteuses restent
 du côté client. Seul le paquet de trames préparées est compressé pour le
 transfert et le stockage.
 
@@ -199,14 +255,34 @@ permet de :
 
 - consulter la connexion, la géométrie, le backend et les statistiques ;
 - choisir les trois horloges et leurs couleurs ;
-- envoyer une couleur, une image PNG/JPEG ou un GIF ;
+- faire défiler un texte avec police, taille, vitesse, couleur fixe,
+  arc-en-ciel ou palette personnalisée et durée du cycle ;
+- envoyer une couleur, une image PNG/JPEG/HEIC ou un GIF ;
 - prétraiter, nommer, stocker et lancer un GIF sur le Pi ;
 - relancer une animation persistante en saisissant son nom ;
 - demander l’affichage temporaire des informations techniques.
 
-Les images fixes doivent avoir exactement les dimensions annoncées par le
-serveur. Les GIF conservent leur ratio et sont automatiquement adaptés à cette
-géométrie, comme avec l’option CLI `-gif`.
+Le choix de police du texte défilant est alimenté par le catalogue embarqué et
+regroupé par famille (`digital`, `fixed`, `modern`, `marquee` et `Go`). Les
+polices ajoutées dans `assets/ttf` sont proposées après recompilation.
+
+Les images fixes envoyées par la GUI sont automatiquement redimensionnées pour
+remplir la matrice en conservant leur aspect ratio, puis recadrées au centre.
+L'excédent est coupé symétriquement sur les côtés ou en haut et en bas : aucune
+déformation ni bande ajoutée. Les PNG transparents sont composés sur fond noir.
+Le client accepte PNG, JPEG et HEIC/HEIF et limite les images décodées à
+64 mégapixels. L'option CLI `-image` conserve son exigence de dimensions exactes.
+
+Le HEIC est converti localement en PNG avant ce traitement : sur macOS, le
+client utilise `sips`, fourni avec le système. Sur les autres plateformes,
+installer les outils de [libheif](https://github.com/strukturag/libheif) sur la
+machine qui lance la GUI, avec `heif-dec` ou `heif-convert` accessible dans le
+`PATH`. Aucune dépendance HEIC n'est nécessaire sur le serveur LED. Une erreur
+explicite est affichée si le convertisseur n'est pas disponible ; les fichiers
+temporaires sont supprimés après la conversion.
+
+Les GIF conservent leur ratio et sont automatiquement adaptés à la géométrie
+avec des bandes si nécessaire, comme avec l’option CLI `-gif`.
 
 Par défaut, la GUI écoute uniquement sur la boucle locale. Une autre adresse
 peut être choisie avec `-gui-listen`, par exemple `127.0.0.1:9090`. Le projet

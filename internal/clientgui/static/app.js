@@ -98,6 +98,69 @@ bindForm("#clock-form", async (form) => {
   toast("Horloge activée");
 });
 
+bindForm("#marquee-form", async (form) => {
+  const cycle = form.get("cycle");
+  let colors = [];
+  if (cycle === "rainbow") {
+    colors = ["#ff0000", "#ffff00", "#00ff00", "#00ffff", "#0000ff", "#ff00ff"];
+  } else if (cycle === "custom") {
+    colors = form.get("palette").split(",").map((color) => color.trim());
+    if (colors.length < 2 || colors.length > 16 || colors.some((color) => !/^#[0-9a-f]{6}$/i.test(color))) {
+      throw new Error("La palette doit contenir 2 à 16 couleurs au format #RRGGBB.");
+    }
+  }
+  setActivity("Activation du texte défilant…");
+  await request("/api/marquee", jsonOptions({
+    text: form.get("text"),
+    font: form.get("font"),
+    size: Number(form.get("size")),
+    color: $("#marquee-form input[name=color]").value,
+    speed: Number(form.get("speed")),
+    color_cycle: colors,
+    cycle_seconds: cycle === "none" ? 6 : Number(form.get("cycle_seconds")),
+  }));
+  setActivity("Texte défilant actif sur le serveur.");
+  toast("Texte défilant activé");
+});
+
+function updateMarqueeFields() {
+  const cycle = $("#marquee-cycle").value;
+  $("#marquee-palette-field").hidden = cycle !== "custom";
+  $("#marquee-period-field").hidden = cycle === "none";
+  $("#marquee-form input[name=palette]").disabled = cycle !== "custom";
+  $("#marquee-form input[name=cycle_seconds]").disabled = cycle === "none";
+  $("#marquee-form input[name=color]").disabled = cycle !== "none";
+}
+
+$("#marquee-cycle").addEventListener("change", updateMarqueeFields);
+updateMarqueeFields();
+
+async function loadMarqueeFonts() {
+  try {
+    const fonts = await request("/api/marquee/fonts");
+    const select = $("#marquee-form select[name=font]");
+    const selected = select.value;
+    const groups = new Map();
+    for (const font of fonts) {
+      if (!groups.has(font.category)) {
+        const group = document.createElement("optgroup");
+        group.label = font.category;
+        groups.set(font.category, group);
+      }
+      const option = document.createElement("option");
+      option.value = font.name;
+      option.textContent = font.label;
+      groups.get(font.category).append(option);
+    }
+    select.replaceChildren(...groups.values());
+    select.value = selected;
+  } catch (error) {
+    toast(`Chargement des polices impossible : ${error.message}`, true);
+  }
+}
+
+loadMarqueeFonts();
+
 bindForm("#color-form", async (form) => {
   setActivity("Envoi de la couleur…");
   await request("/api/color", jsonOptions({color: form.get("color")}));
@@ -106,7 +169,7 @@ bindForm("#color-form", async (form) => {
 });
 
 bindForm("#image-form", async (form) => {
-  setActivity("Envoi de l’image…");
+  setActivity("Préparation de l’image : redimensionnement et recadrage centré…");
   await request("/api/image", {method: "POST", body: form});
   setActivity("Image affichée.");
   toast("Image affichée");

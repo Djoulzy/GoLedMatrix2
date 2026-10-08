@@ -20,6 +20,7 @@ import (
 	appconfig "github.com/Djoulzy/GoLedMatrix2/internal/config"
 	"github.com/Djoulzy/GoLedMatrix2/internal/display"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
+	"github.com/Djoulzy/GoLedMatrix2/internal/marquee"
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
 	"github.com/Djoulzy/GoLedMatrix2/internal/server"
 	"github.com/Djoulzy/GoLedMatrix2/internal/technical"
@@ -228,7 +229,9 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 		return err
 	}
 	animationPlayer := animation.NewPlayer(ctx, animationStore, renderer, width, height)
-	apiOptions := make([]server.Option, 0, 3)
+	marqueePlayer := marquee.NewPlayer(ctx, renderer)
+	defer marqueePlayer.Stop()
+	apiOptions := make([]server.Option, 0, 4)
 	apiOptions = append(apiOptions,
 		server.WithClockDisplay(func(selection server.ClockSelection) (server.ClockState, error) {
 			state, err := clockController.Activate(selection)
@@ -242,6 +245,7 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 			return state, nil
 		}),
 		server.WithAnimations(animationPlayer, cfg.config.Animation.MaxUploadMB*1024*1024),
+		server.WithMarquee(marqueePlayer),
 	)
 	if seconds := cfg.config.HTTP.InfoDisplaySeconds; seconds > 0 {
 		apiOptions = append(apiOptions, server.WithTechnicalDisplay(

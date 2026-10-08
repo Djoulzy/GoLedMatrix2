@@ -39,6 +39,12 @@ func (p *Player) Upload(name string, reader io.Reader) (Metadata, error) {
 }
 
 func (p *Player) Play(name string) (Metadata, error) {
+	return p.PlayReplacing(name, nil)
+}
+
+// PlayReplacing validates the stored animation before stopping another display
+// mode. The callback runs before any animation frame is submitted.
+func (p *Player) PlayReplacing(name string, stopPrevious func()) (Metadata, error) {
 	bundle, err := p.store.Load(name)
 	if err != nil {
 		return Metadata{}, err
@@ -48,6 +54,9 @@ func (p *Player) Play(name string) (Metadata, error) {
 			"animation geometry %dx%d does not match display %dx%d",
 			bundle.Width, bundle.Height, p.width, p.height,
 		)
+	}
+	if stopPrevious != nil {
+		stopPrevious()
 	}
 	p.mu.Lock()
 	if p.cancel != nil {

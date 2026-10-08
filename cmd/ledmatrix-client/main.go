@@ -19,6 +19,7 @@ import (
 	"github.com/Djoulzy/GoLedMatrix2/internal/client"
 	"github.com/Djoulzy/GoLedMatrix2/internal/clientgui"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
+	"github.com/Djoulzy/GoLedMatrix2/internal/marquee"
 )
 
 func main() {
@@ -29,6 +30,14 @@ func main() {
 	showClock := flag.String("clock", "", "clock display mode: simple, fancy, or round")
 	clockColor1 := flag.String("clock-color1", "", "clock primary color in #RRGGBB form")
 	clockColor2 := flag.String("clock-color2", "", "clock secondary color in #RRGGBB form")
+	marqueeText := flag.String("marquee", "", "text to scroll from right to left on the server")
+	marqueeFont := flag.String("marquee-font", "regular", "marquee font name or path relative to assets/ttf (see -list-marquee-fonts)")
+	listMarqueeFonts := flag.Bool("list-marquee-fonts", false, "list all bundled marquee fonts and exit (no server required)")
+	marqueeSize := flag.Int("marquee-size", 16, "marquee font size in pixels (2-256)")
+	marqueeColor := flag.String("marquee-color", "#ffffff", "marquee text color in #RRGGBB form")
+	marqueeSpeed := flag.Float64("marquee-speed", 30, "marquee speed in pixels per second (1-500)")
+	marqueeCycle := flag.String("marquee-cycle", "", "rainbow or comma-separated #RRGGBB colors (2-16)")
+	marqueeCycleSeconds := flag.Float64("marquee-cycle-seconds", 6, "duration of a complete marquee color cycle in seconds")
 	gifPath := flag.String("gif", "", "GIF animation to preprocess, store, and play")
 	animationName := flag.String("animation-name", "", "stored animation name (defaults to the GIF filename)")
 	playAnimation := flag.String("play-animation", "", "play a previously stored animation")
@@ -51,6 +60,12 @@ func main() {
 	if *showClock != "" {
 		selectedActions++
 	}
+	if *marqueeText != "" {
+		selectedActions++
+	}
+	if *listMarqueeFonts {
+		selectedActions++
+	}
 	if *gifPath != "" {
 		selectedActions++
 	}
@@ -61,8 +76,13 @@ func main() {
 		selectedActions++
 	}
 	if selectedActions != 1 {
-		log.Fatal("provide exactly one of -image, -color, -show-info, -clock, -gif, -play-animation, or -gui")
+		log.Fatal("provide exactly one of -image, -color, -show-info, -clock, -marquee, -list-marquee-fonts, -gif, -play-animation, or -gui")
 	}
+	flag.Visit(func(item *flag.Flag) {
+		if strings.HasPrefix(item.Name, "marquee-") && *marqueeText == "" {
+			log.Fatalf("-%s requires -marquee", item.Name)
+		}
+	})
 	if *showClock == "" && (*clockColor1 != "" || *clockColor2 != "") {
 		log.Fatal("-clock-color1 and -clock-color2 require -clock")
 	}
@@ -74,6 +94,16 @@ func main() {
 	}
 	if *gifPath == "" && (*animationName != "" || *animationLoops != -1) {
 		log.Fatal("-animation-name and -animation-loops require -gif")
+	}
+	if *listMarqueeFonts {
+		fonts, err := marquee.Fonts()
+		if err != nil {
+			log.Fatal(err)
+		}
+		for _, font := range fonts {
+			fmt.Printf("%-32s %s (%s)\n", font.Name, font.Label, font.Category)
+		}
+		return
 	}
 	api, err := client.New(*serverURL, *timeout)
 	if err != nil {
@@ -91,6 +121,22 @@ func main() {
 		return
 	}
 	ctx := context.Background()
+	if *marqueeText != "" {
+		cycle, err := marquee.ParseCycle(*marqueeCycle)
+		if err != nil {
+			log.Fatal(err)
+		}
+		state, err := api.DisplayMarquee(ctx, marquee.Options{
+			Text: *marqueeText, Font: *marqueeFont, Size: *marqueeSize,
+			Color: *marqueeColor, Speed: *marqueeSpeed,
+			ColorCycle: cycle, CycleSeconds: *marqueeCycleSeconds,
+		})
+		if err != nil {
+			log.Fatalf("display marquee: %v", err)
+		}
+		fmt.Printf("marquee %q scrolling (%s, %d px, %.1f px/s)\n", state.Text, state.Font, state.Size, state.Speed)
+		return
+	}
 	if *showInfo {
 		if err := api.DisplayInfo(ctx); err != nil {
 			log.Fatalf("display server information: %v", err)
