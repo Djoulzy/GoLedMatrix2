@@ -4,11 +4,10 @@ Serveur d’affichage léger pour matrices LED RGB HUB75 pilotées par Raspberry
 et client Go chargé de préparer puis d’envoyer les images.
 
 Le projet s’appuie sur
-[`rpi-rgb-led-matrix`](https://github.com/hzeller/rpi-rgb-led-matrix) et reprend
-l’API du wrapper
-[`go-rpi-rgb-led-matrix`](https://github.com/zaggash/go-rpi-rgb-led-matrix).
-La version utilisée est épinglée à
-`v0.0.0-20231128121715-f3ceee87d19f`.
+[`rpi-rgb-led-matrix`](https://github.com/hzeller/rpi-rgb-led-matrix), dont la
+version est épinglée dans le sous-module `third_party/_rpi-rgb-led-matrix`.
+Un adaptateur CGO local utilise directement son API C et conserve le buffer
+hors écran renvoyé par chaque échange au VSync.
 
 ## État du projet
 
@@ -44,7 +43,7 @@ Fondations disponibles :
 
 Le client compose une image à la géométrie exacte de la dalle, la convertit en
 RGB24 puis l’envoie. Le serveur valide la taille, remplace la trame en attente et
-effectue un `Render()` sur le prochain VSync.
+copie la trame RGB24 dans le buffer hors écran puis l'échange au prochain VSync.
 
 `rpi-rgb-led-matrix` conserve ensuite cette image dans son buffer natif et
 rafraîchit continuellement les GPIO. Il n’existe volontairement **aucune boucle
@@ -52,7 +51,7 @@ Go qui redessine une image inchangée** : elle consommerait du CPU et introduira
 de la gigue sans améliorer la stabilité.
 
 ```text
-composition/PNG (client) -> RGB24 -> HTTP -> dernière trame -> Render/VSync
+composition/PNG (client) -> RGB24 -> HTTP -> dernière trame -> copie/VSync
 GIF -> composition/resize client -> paquet RGB24 temporisé -> stockage/lecture
                                                               -> scan GPIO natif
 GUI web -> client Go local -> mêmes commandes HTTP et prétraitements
@@ -81,12 +80,37 @@ Décrit le contrat attendu par le serveur :
   "base_urls": ["http://192.168.0.18:8080"],
   "started_at": "2026-07-28T10:00:00Z",
   "uptime_seconds": 42,
-  "stats": {"accepted": 0, "rendered": 0, "failed": 0}
+  "stats": {"accepted": 0, "rendered": 0, "failed": 0},
+  "system": {
+    "temperatures": [{"sensor": "thermal_zone0", "name": "cpu-thermal", "celsius": 48.5}],
+    "sampled_at": "2026-07-28T10:00:40Z"
+  }
 }
 ```
 
-`base_urls` fournit au client les adresses détectées ou configurées pour joindre
-le serveur.
+`base_urls` fournit au client les adresses actuellement utilisables pour joindre
+le serveur. Avec une écoute sur toutes les interfaces, la liste est recalculée
+à chaque demande : les adresses source choisies par le routage du système sont
+prioritaires, puis viennent les autres adresses des interfaces actives.
+La détection interroge la pile réseau sans envoyer de paquet ni dépendre d'un
+service Internet. L'écran technique affiche la première adresse de cette liste,
+au démarrage et lors de `POST /v1/display-info`. Une écoute limitée à une adresse
+précise n'annonce que cette adresse. L'adresse SSH utilisée pour le déploiement
+n'intervient pas dans cette détection.
+
+`system.temperatures` contient les capteurs thermiques internes accessibles sur
+le serveur Linux, indépendamment du backend d'affichage. Le serveur détecte les
+zones `/sys/class/thermal/thermal_zone*`, lit leur `type` et convertit leur `temp`
+de millièmes de degré en °C. Le numéro de zone ne détermine pas le type de capteur.
+Il ne s'agit pas de la température ambiante.
+
+Un relevé est effectué au démarrage puis toutes les cinq secondes en tâche de
+fond, sans lecture de fichiers pendant les requêtes HTTP ni dans le rendu LED.
+`sampled_at` indique l'heure du dernier relevé, y compris lorsqu'aucun capteur
+n'a pu être lu. Les capteurs absents, illisibles ou invalides sont ignorés : la
+liste est vide si aucun n'est accessible, sans bloquer le serveur ni conserver
+d'anciennes températures. Hors Linux, la liste est vide et `sampled_at` absent.
+Aucune bibliothèque supplémentaire ni commande externe n'est nécessaire.
 
 ### `PUT /v1/frame`
 
@@ -144,9 +168,16 @@ go run ./cmd/ledmatrix-client \
 
 ### `POST /v1/marquee`
 
-Lance un texte défilant de droite à gauche, centré verticalement sur fond noir.
-Le serveur le rend à 30 images/seconde et le répète après sa sortie complète à
-gauche, même lorsque le client est fermé. Toutes les polices `.ttf` et `.otf`
+Lance un texte défilant sur fond noir. Par défaut, il est centré verticalement
+et défile de droite à gauche.
+Le serveur vise 60 images/seconde. En mode boucle, le texte est répété après sa
+sortie complète à gauche, même lorsque le client est fermé. Les positions entre
+pixels sont interpolées pour lisser le mouvement, y compris à des vitesses non
+entières.
+La position dépend du temps réellement écoulé : une trame retardée ne provoque
+pas le rejeu d'anciennes positions. La cadence effective dépend du matériel ;
+les échanges de buffers sur le Pi sont toujours effectués au VSync.
+Toutes les polices `.ttf` et `.otf`
 présentes dans `assets/ttf` sont intégrées aux exécutables, en plus de Go Regular,
 Go Bold et Go Mono ; aucun fichier de police n'est requis sur le Raspberry Pi.
 
@@ -159,6 +190,8 @@ Le corps utilise `Content-Type: application/json` :
   "size": 16,
   "color": "#FFFFFF",
   "speed": 30,
+  "bounce": false,
+  "vertical_bounce": false,
   "color_cycle": ["#FF0000", "#00FF00", "#0000FF"],
   "cycle_seconds": 6
 }
@@ -192,6 +225,38 @@ période complète de `cycle_seconds` secondes (0,1 à 3600). La réponse est
 ./bin/ledmatrix-client -server http://192.168.0.18:8080 \
   -marquee 'Une palette personnalisée' \
   -marquee-cycle '#ff8337,#7be0de,#ffffff' -marquee-cycle-seconds 4
+```
+
+Avec `bounce: true`, le texte fait des allers-retours horizontaux : s'il tient
+dans la dalle, il reste entièrement visible et rebondit aux bords ; s'il est
+plus large, le début puis la fin du texte sont affichés avant chaque inversion.
+Un texte exactement aussi large que la dalle reste fixe. Les couleurs continuent
+leur cycle pendant les rebonds. La valeur par défaut `false` conserve le
+défilement en boucle de droite à gauche.
+
+```bash
+./bin/ledmatrix-client -server http://192.168.0.107:8080 \
+  -marquee 'Bonjour !' -marquee-bounce -marquee-speed 30
+```
+
+Avec `vertical_bounce: true`, le texte continue son défilement horizontal tout
+en montant et descendant suivant une sinusoïde. Il commence au centre et utilise
+toute la hauteur disponible autour du texte, sans ajouter de rognage vertical.
+Si le texte est aussi haut que la dalle ou plus haut, il reste centré verticalement
+(avec le rognage habituel si nécessaire). `vertical_bounce_seconds` règle la durée
+d'un aller-retour complet, de 0,1 à 3600 secondes, avec 4 secondes par défaut lorsque
+l'effet est activé. Le mouvement vertical est interpolé entre les pixels et sa
+phase reste continue, même lorsque le texte quitte la dalle ou reboucle.
+
+L'oscillation verticale est indépendante de `bounce` : elle peut accompagner le
+défilement classique de droite à gauche ou le rebond horizontal existant, avec
+une couleur fixe ou un cycle de couleurs. Dans la GUI, choisir « Trajectoire
+verticale → Sinusoïdale (haut / bas) » et régler la durée de l'aller-retour.
+
+```bash
+./bin/ledmatrix-client -server http://192.168.0.107:8080 \
+  -marquee 'Bonjour !' -marquee-vertical-bounce \
+  -marquee-vertical-bounce-seconds 4 -marquee-speed 30
 ```
 
 Un nouveau marquee, une image/couleur, une animation ou l'horloge remplace le
@@ -254,8 +319,11 @@ Ouvrir ensuite [http://127.0.0.1:8090](http://127.0.0.1:8090). L’interface
 permet de :
 
 - consulter la connexion, la géométrie, le backend et les statistiques ;
+- consulter les températures internes du serveur, actualisées toutes les cinq
+  secondes, ou l'état « Indisponible » si aucun capteur n'est accessible ;
 - choisir les trois horloges et leurs couleurs ;
-- faire défiler un texte avec police, taille, vitesse, couleur fixe,
+- faire défiler un texte en boucle ou avec rebond horizontal, avec oscillation
+  verticale sinusoïdale optionnelle, police, taille, vitesse, couleur fixe,
   arc-en-ciel ou palette personnalisée et durée du cycle ;
 - envoyer une couleur, une image PNG/JPEG/HEIC ou un GIF ;
 - prétraiter, nommer, stocker et lancer un GIF sur le Pi ;
@@ -535,10 +603,8 @@ sudo ./bin/ledmatrix-server \
   -config server.toml
 ```
 
-Le wrapper cherche normalement ses en-têtes et sa bibliothèque native dans son
-propre répertoire `lib/rpi-rgb-led-matrix`, absent des archives du proxy Go.
-Le `Makefile` fournit donc `CGO_CFLAGS` et `CGO_LDFLAGS` pour utiliser notre
-sous-module épinglé dans `third_party/_rpi-rgb-led-matrix/`. Le préfixe `_`
+L'adaptateur CGO et le `Makefile` utilisent les en-têtes et la bibliothèque
+du sous-module épinglé dans `third_party/_rpi-rgb-led-matrix/`. Le préfixe `_`
 empêche `go test ./...` d’interpréter par erreur l’arborescence C++ comme des
 packages Go.
 
@@ -696,7 +762,9 @@ Pi dispose d'un pare-feu, autoriser uniquement le sous-réseau local utilisé.
 - La géométrie fixe rend la validation constante et borne strictement la mémoire.
 - Un seul goroutine appelle le driver natif.
 - La stratégie « dernière trame gagnante » borne la file et la latence.
-- La bibliothèque native réalise le double buffering et attend le VSync.
+- Les trames RGB24 sont copiées en bloc dans le buffer hors écran ; le buffer
+  renvoyé par l'échange au VSync devient le buffer d'écriture suivant. Aucune
+  trame n'est composée dans le buffer actif pendant le balayage de la dalle.
 - Une connexion HTTP persistante est réutilisée par le client Go.
 - Les animations autonomes sont lues depuis des trames RGB24 déjà préparées ;
   le Pi ne décode jamais le GIF et utilise des échéances monotones pour limiter
@@ -710,6 +778,7 @@ Elle devra être mesurée sur le montage réel avant de fixer une cadence client
 
 ```bash
 make test
+make test-rpi-binding
 make build
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./cmd/...
 ```
@@ -717,9 +786,16 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./cmd/...
 La dernière commande vérifie la séparation portable ; elle ne produit pas le
 backend matériel, qui exige CGO et la bibliothèque native.
 
+`make test` inclut les tests du binding CGO, aussi disponibles séparément avec
+`make test-rpi-binding`. Ils compilent l'adaptateur de production contre un faux
+pilote C et les vrais en-têtes, sans accéder aux GPIO : alternance des buffers,
+ordre RGB24, géométrie après mapping, réglages matériels et arrêt sont vérifiés.
+Un compilateur C et les en-têtes du sous-module initialisé sont nécessaires.
+Le tag `rpistub` est réservé à ces tests et ne doit pas être utilisé pour un
+serveur réel.
+
 ## Licence
 
 À définir pour le code de ce dépôt. Attention : `rpi-rgb-led-matrix` est sous
-GPL-2.0-or-later, tandis que le wrapper Go `zaggash` est sous licence MIT. La
-distribution d’un binaire lié à la bibliothèque native doit respecter les
-obligations de la GPL.
+GPL-2.0-or-later. La distribution d’un binaire lié à la bibliothèque native doit
+respecter les obligations de la GPL.

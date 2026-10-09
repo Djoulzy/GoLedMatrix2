@@ -40,6 +40,26 @@ function humanDuration(seconds) {
   return [days && `${days}j`, (days || hours) && `${hours}h`, `${minutes}m`].filter(Boolean).join(" ");
 }
 
+function displayTemperatures(system, offline = false) {
+  const list = $("#temperatures");
+  const status = $("#temperature-status");
+  list.replaceChildren();
+  const temperatures = Array.isArray(system?.temperatures) ? system.temperatures : [];
+  for (const temperature of temperatures) {
+    if (!Number.isFinite(temperature?.celsius)) continue;
+    const reading = document.createElement("div");
+    const name = document.createElement("dt");
+    name.textContent = temperature.name || temperature.sensor || "Capteur";
+    name.title = temperature.sensor || "";
+    const value = document.createElement("dd");
+    value.textContent = `${temperature.celsius.toLocaleString("fr-FR", {minimumFractionDigits: 1, maximumFractionDigits: 1})} °C`;
+    reading.append(name, value);
+    list.append(reading);
+  }
+  status.hidden = list.childElementCount > 0;
+  status.textContent = offline ? "Indisponible — serveur hors ligne" : "Indisponible — aucun capteur accessible";
+}
+
 async function refreshInfo(silent = false) {
   try {
     const info = await request("/api/info");
@@ -50,6 +70,7 @@ async function refreshInfo(silent = false) {
     $("#geometry").textContent = `${info.width} × ${info.height}`;
     $("#format").textContent = info.pixel_format;
     $("#uptime").textContent = humanDuration(info.uptime_seconds);
+    displayTemperatures(info.system);
     const accepted = info.stats?.accepted || 0;
     const rendered = info.stats?.rendered || 0;
     $("#stats").textContent = `${rendered} / ${accepted} trames rendues`;
@@ -57,6 +78,7 @@ async function refreshInfo(silent = false) {
   } catch (error) {
     $("#connection").className = "connection offline";
     $("#connection-label").textContent = "Serveur hors ligne";
+    displayTemperatures(null, true);
     if (!silent) toast(error.message, true);
   }
 }
@@ -100,6 +122,7 @@ bindForm("#clock-form", async (form) => {
 
 bindForm("#marquee-form", async (form) => {
   const cycle = form.get("cycle");
+  const verticalBounce = form.get("vertical_bounce") === "true";
   let colors = [];
   if (cycle === "rainbow") {
     colors = ["#ff0000", "#ffff00", "#00ff00", "#00ffff", "#0000ff", "#ff00ff"];
@@ -116,6 +139,9 @@ bindForm("#marquee-form", async (form) => {
     size: Number(form.get("size")),
     color: $("#marquee-form input[name=color]").value,
     speed: Number(form.get("speed")),
+    bounce: form.get("bounce") === "true",
+    vertical_bounce: verticalBounce,
+    vertical_bounce_seconds: verticalBounce ? Number(form.get("vertical_bounce_seconds")) : 0,
     color_cycle: colors,
     cycle_seconds: cycle === "none" ? 6 : Number(form.get("cycle_seconds")),
   }));
@@ -134,6 +160,15 @@ function updateMarqueeFields() {
 
 $("#marquee-cycle").addEventListener("change", updateMarqueeFields);
 updateMarqueeFields();
+
+function updateMarqueeVerticalFields() {
+  const enabled = $("#marquee-vertical-bounce").value === "true";
+  $("#marquee-vertical-period-field").hidden = !enabled;
+  $("#marquee-form input[name=vertical_bounce_seconds]").disabled = !enabled;
+}
+
+$("#marquee-vertical-bounce").addEventListener("change", updateMarqueeVerticalFields);
+updateMarqueeVerticalFields();
 
 async function loadMarqueeFonts() {
   try {

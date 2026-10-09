@@ -30,12 +30,15 @@ func main() {
 	showClock := flag.String("clock", "", "clock display mode: simple, fancy, or round")
 	clockColor1 := flag.String("clock-color1", "", "clock primary color in #RRGGBB form")
 	clockColor2 := flag.String("clock-color2", "", "clock secondary color in #RRGGBB form")
-	marqueeText := flag.String("marquee", "", "text to scroll from right to left on the server")
+	marqueeText := flag.String("marquee", "", "text to scroll on the server")
 	marqueeFont := flag.String("marquee-font", "regular", "marquee font name or path relative to assets/ttf (see -list-marquee-fonts)")
 	listMarqueeFonts := flag.Bool("list-marquee-fonts", false, "list all bundled marquee fonts and exit (no server required)")
 	marqueeSize := flag.Int("marquee-size", 16, "marquee font size in pixels (2-256)")
 	marqueeColor := flag.String("marquee-color", "#ffffff", "marquee text color in #RRGGBB form")
 	marqueeSpeed := flag.Float64("marquee-speed", 30, "marquee speed in pixels per second (1-500)")
+	marqueeBounce := flag.Bool("marquee-bounce", false, "bounce horizontally instead of wrapping")
+	marqueeVerticalBounce := flag.Bool("marquee-vertical-bounce", false, "add sinusoidal up-and-down movement while scrolling")
+	marqueeVerticalBounceSeconds := flag.Float64("marquee-vertical-bounce-seconds", 4, "duration of a complete vertical round trip in seconds (0.1-3600)")
 	marqueeCycle := flag.String("marquee-cycle", "", "rainbow or comma-separated #RRGGBB colors (2-16)")
 	marqueeCycleSeconds := flag.Float64("marquee-cycle-seconds", 6, "duration of a complete marquee color cycle in seconds")
 	gifPath := flag.String("gif", "", "GIF animation to preprocess, store, and play")
@@ -126,15 +129,27 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
+		verticalSeconds := 0.0
+		if *marqueeVerticalBounce {
+			verticalSeconds = *marqueeVerticalBounceSeconds
+		}
 		state, err := api.DisplayMarquee(ctx, marquee.Options{
 			Text: *marqueeText, Font: *marqueeFont, Size: *marqueeSize,
-			Color: *marqueeColor, Speed: *marqueeSpeed,
+			Color: *marqueeColor, Speed: *marqueeSpeed, Bounce: *marqueeBounce,
+			VerticalBounce: *marqueeVerticalBounce, VerticalBounceSeconds: verticalSeconds,
 			ColorCycle: cycle, CycleSeconds: *marqueeCycleSeconds,
 		})
 		if err != nil {
 			log.Fatalf("display marquee: %v", err)
 		}
-		fmt.Printf("marquee %q scrolling (%s, %d px, %.1f px/s)\n", state.Text, state.Font, state.Size, state.Speed)
+		motion := "scrolling"
+		if state.Bounce {
+			motion = "bouncing"
+		}
+		if state.VerticalBounce {
+			motion += fmt.Sprintf(" with vertical sine wave (%.1f s)", state.VerticalBounceSeconds)
+		}
+		fmt.Printf("marquee %q %s (%s, %d px, %.1f px/s)\n", state.Text, motion, state.Font, state.Size, state.Speed)
 		return
 	}
 	if *showInfo {

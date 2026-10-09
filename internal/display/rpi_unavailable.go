@@ -1,4 +1,4 @@
-//go:build !linux || !cgo || !rpi
+//go:build !cgo || (!rpistub && (!linux || !rpi))
 
 package display
 

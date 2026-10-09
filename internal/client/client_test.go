@@ -15,6 +15,7 @@ import (
 	"github.com/Djoulzy/GoLedMatrix2/internal/marquee"
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
 	"github.com/Djoulzy/GoLedMatrix2/internal/server"
+	"github.com/Djoulzy/GoLedMatrix2/internal/thermal"
 )
 
 func TestInfoAndSend(t *testing.T) {
@@ -23,7 +24,13 @@ func TestInfoAndSend(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go renderer.Run(ctx)
-	api, _ := server.New(2, 1, "memory", renderer)
+	sampledAt := time.Now().UTC()
+	api, _ := server.New(2, 1, "memory", renderer, server.WithTemperatures(func() thermal.Stats {
+		return thermal.Stats{
+			Temperatures: []thermal.Temperature{{Sensor: "thermal_zone3", Name: "cpu-thermal", Celsius: 52.5}},
+			SampledAt:    &sampledAt,
+		}
+	}))
 
 	client, err := New("http://matrix.test", time.Second)
 	if err != nil {
@@ -37,6 +44,9 @@ func TestInfoAndSend(t *testing.T) {
 	if info.Width != 2 || info.Height != 1 {
 		t.Fatalf("geometry = %dx%d", info.Width, info.Height)
 	}
+	if len(info.System.Temperatures) != 1 || info.System.Temperatures[0].Celsius != 52.5 || info.System.SampledAt == nil || !info.System.SampledAt.Equal(sampledAt) {
+		t.Fatalf("client lost temperatures: %+v", info.System)
+	}
 	next, _ := frame.New(2, 1, []byte{1, 2, 3, 4, 5, 6})
 	sequence, err := client.Send(ctx, next)
 	if err != nil {
@@ -44,6 +54,20 @@ func TestInfoAndSend(t *testing.T) {
 	}
 	if sequence != 1 {
 		t.Fatalf("sequence = %d, want 1", sequence)
+	}
+}
+
+func TestInfoFromOlderServerWithoutTemperatures(t *testing.T) {
+	api, err := New("http://matrix.test", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	api.http.Transport = handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"protocol_version":"1","width":2,"height":1,"pixel_format":"rgb24"}`))
+	})}
+	info, err := api.Info(context.Background())
+	if err != nil || info.Width != 2 || len(info.System.Temperatures) != 0 {
+		t.Fatalf("older server info = %+v, %v", info, err)
 	}
 }
 
@@ -88,7 +112,8 @@ func TestDisplayMarquee(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	options := marquee.Options{Text: "Été & hiver ?", Font: "mono", Size: 18, Color: "#123456", Speed: 40,
+	options := marquee.Options{Text: "Été & hiver ?", Font: "mono", Size: 18, Color: "#123456", Speed: 40, Bounce: true,
+		VerticalBounce: true, VerticalBounceSeconds: 2.5,
 		ColorCycle: []string{"#FF0000", "#00FF00"}, CycleSeconds: 3}
 	api.http.Transport = handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/marquee" || r.Header.Get("Content-Type") != "application/json" {
@@ -98,14 +123,17 @@ func TestDisplayMarquee(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Fatal(err)
 		}
-		if got.Text != options.Text || got.Font != options.Font || got.Size != options.Size || got.Color != options.Color || got.Speed != options.Speed || len(got.ColorCycle) != 2 || got.CycleSeconds != 3 {
+		if got.Text != options.Text || got.Font != options.Font || got.Size != options.Size || got.Color != options.Color || got.Speed != options.Speed || !got.Bounce || len(got.ColorCycle) != 2 || got.CycleSeconds != 3 {
 			t.Fatalf("sent settings = %+v", got)
+		}
+		if !got.VerticalBounce || got.VerticalBounceSeconds != options.VerticalBounceSeconds {
+			t.Fatalf("lost vertical bounce settings: %+v", got)
 		}
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(got)
 	})}
 	state, err := api.DisplayMarquee(context.Background(), options)
-	if err != nil || state.Text != options.Text || state.Font != options.Font {
+	if err != nil || state.Text != options.Text || state.Font != options.Font || !state.Bounce || !state.VerticalBounce || state.VerticalBounceSeconds != options.VerticalBounceSeconds {
 		t.Fatalf("marquee state = %+v, %v", state, err)
 	}
 	api.http.Transport = handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -8,6 +8,8 @@ import (
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
 )
 
+const playbackInterval = time.Second / 60
+
 type Player struct {
 	ctx        context.Context
 	renderer   *render.Renderer
@@ -48,14 +50,16 @@ func (p *Player) Stop() {
 
 func (p *Player) run(ctx context.Context, generation uint64, text *Marquee) {
 	started := time.Now()
-	ticker := time.NewTicker(time.Second / 30)
+	ticker := time.NewTicker(playbackInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-ticker.C:
-			next := text.Render(now.Sub(started))
+		case <-ticker.C:
+			// A delayed tick must render the current position, not its stale
+			// scheduled timestamp. Keep speed independent of dropped frames.
+			next := text.Render(time.Since(started))
 			p.mu.Lock()
 			if ctx.Err() != nil || p.generation != generation {
 				p.mu.Unlock()

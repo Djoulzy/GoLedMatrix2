@@ -1,4 +1,4 @@
-// Package marquee renders autonomous right-to-left scrolling text.
+// Package marquee renders autonomous scrolling text, with optional edge bouncing.
 package marquee
 
 import (
@@ -19,15 +19,21 @@ import (
 )
 
 // Options is shared by the HTTP API, CLI and GUI. Zero values select defaults.
+// Bounce reflects the horizontal movement at the edges instead of wrapping.
+// VerticalBounce adds a sinusoidal vertical motion within the available height.
+// VerticalBounceSeconds is the duration of a complete vertical round trip.
 // CycleSeconds is the duration of one complete, smoothly interpolated palette.
 type Options struct {
-	Text         string   `json:"text"`
-	Font         string   `json:"font,omitempty"`
-	Size         int      `json:"size,omitempty"`
-	Color        string   `json:"color,omitempty"`
-	Speed        float64  `json:"speed,omitempty"`
-	ColorCycle   []string `json:"color_cycle,omitempty"`
-	CycleSeconds float64  `json:"cycle_seconds,omitempty"`
+	Text                  string   `json:"text"`
+	Font                  string   `json:"font,omitempty"`
+	Size                  int      `json:"size,omitempty"`
+	Color                 string   `json:"color,omitempty"`
+	Speed                 float64  `json:"speed,omitempty"`
+	Bounce                bool     `json:"bounce,omitempty"`
+	VerticalBounce        bool     `json:"vertical_bounce,omitempty"`
+	VerticalBounceSeconds float64  `json:"vertical_bounce_seconds,omitempty"`
+	ColorCycle            []string `json:"color_cycle,omitempty"`
+	CycleSeconds          float64  `json:"cycle_seconds,omitempty"`
 }
 
 var rainbow = []string{"#FF0000", "#FFFF00", "#00FF00", "#00FFFF", "#0000FF", "#FF00FF"}
@@ -95,6 +101,12 @@ func New(width, height int, options Options) (*Marquee, error) {
 	if math.IsNaN(options.Speed) || math.IsInf(options.Speed, 0) || options.Speed < 1 || options.Speed > 500 {
 		return nil, fmt.Errorf("speed must be between 1 and 500 pixels per second")
 	}
+	if options.VerticalBounce && options.VerticalBounceSeconds == 0 {
+		options.VerticalBounceSeconds = 4
+	}
+	if options.VerticalBounceSeconds != 0 && (math.IsNaN(options.VerticalBounceSeconds) || math.IsInf(options.VerticalBounceSeconds, 0) || options.VerticalBounceSeconds < 0.1 || options.VerticalBounceSeconds > 3600) {
+		return nil, fmt.Errorf("vertical bounce duration must be between 0.1 and 3600 seconds")
+	}
 	if options.CycleSeconds == 0 {
 		options.CycleSeconds = 6
 	}
@@ -149,18 +161,24 @@ func (m *Marquee) Options() Options {
 	return options
 }
 
-// Render begins just outside the right edge, crosses the display, then repeats
-// once the entire text has left the left edge. Text is vertically centered.
+// Render repeats the text across the display, or reflects its horizontal
+// movement at each edge when Bounce is enabled. VerticalBounce adds a sine wave
+// to its otherwise centered vertical position, independently of horizontal motion.
+// Fractional positions blend neighboring mask pixels instead of snapping to
+// integer rows and columns, keeping both axes smooth at non-integral speeds.
 func (m *Marquee) Render(elapsed time.Duration) frame.Frame {
 	seconds := math.Max(0, elapsed.Seconds())
-	span := m.width + m.mask.Rect.Dx()
-	x := m.width - int(math.Floor(math.Mod(seconds*m.options.Speed, float64(span))))
-	y := (m.height - m.mask.Rect.Dy()) / 2
+	position := m.horizontalPosition(seconds)
+	x := int(math.Ceil(position))
+	fractionX := uint16(math.Round((float64(x) - position) * 256))
+	vertical := m.verticalPosition(seconds)
+	y := int(math.Ceil(vertical))
+	fractionY := uint16(math.Round((float64(y) - vertical) * 256))
 	ink := m.colorAt(seconds)
 	pixels := make([]byte, m.frameSize)
-	for row := max(0, y); row < min(m.height, y+m.mask.Rect.Dy()); row++ {
-		for col := max(0, x); col < min(m.width, x+m.mask.Rect.Dx()); col++ {
-			alpha := uint16(m.mask.AlphaAt(col-x, row-y).A)
+	for row := max(0, y-1); row < min(m.height, y+m.mask.Rect.Dy()); row++ {
+		for col := max(0, x-1); col < min(m.width, x+m.mask.Rect.Dx()); col++ {
+			alpha := m.sampleAlpha(col-x, row-y, fractionX, fractionY)
 			offset := (row*m.width + col) * 3
 			pixels[offset] = byte(uint16(ink.R) * alpha / 255)
 			pixels[offset+1] = byte(uint16(ink.G) * alpha / 255)
@@ -168,6 +186,57 @@ func (m *Marquee) Render(elapsed time.Duration) frame.Frame {
 		}
 	}
 	return frame.Frame{Width: m.width, Height: m.height, Pixels: pixels}
+}
+
+// sampleAlpha interpolates the mask in both axes using 8-bit fixed-point weights.
+// Out-of-bounds mask pixels are transparent, including at the display edges.
+func (m *Marquee) sampleAlpha(x, y int, fractionX, fractionY uint16) uint16 {
+	alpha := uint16(m.mask.AlphaAt(x, y).A)
+	if fractionX != 0 {
+		next := uint16(m.mask.AlphaAt(x+1, y).A)
+		alpha = (alpha*(256-fractionX) + next*fractionX + 128) >> 8
+	}
+	if fractionY != 0 {
+		below := uint16(m.mask.AlphaAt(x, y+1).A)
+		if fractionX != 0 {
+			next := uint16(m.mask.AlphaAt(x+1, y+1).A)
+			below = (below*(256-fractionX) + next*fractionX + 128) >> 8
+		}
+		alpha = (alpha*(256-fractionY) + below*fractionY + 128) >> 8
+	}
+	return alpha
+}
+
+func (m *Marquee) verticalPosition(seconds float64) float64 {
+	available := m.height - m.mask.Rect.Dy()
+	if !m.options.VerticalBounce || available <= 0 {
+		// Preserve the centered crop when the text is as tall as, or taller
+		// than, the display: there is no spare room for vertical movement.
+		return float64(available / 2)
+	}
+	phase := math.Mod(seconds/m.options.VerticalBounceSeconds, 1)
+	return float64(available) / 2 * (1 + math.Sin(2*math.Pi*phase))
+}
+
+func (m *Marquee) horizontalPosition(seconds float64) float64 {
+	textWidth := m.mask.Rect.Dx()
+	if !m.options.Bounce {
+		span := float64(m.width + textWidth)
+		return float64(m.width) - math.Mod(seconds*m.options.Speed, span)
+	}
+	// Short text stays inside the display. Long text pans between its first
+	// and last columns instead of disappearing offscreen at the turnarounds.
+	left := float64(min(0, m.width-textWidth))
+	right := float64(max(0, m.width-textWidth))
+	travel := right - left
+	if travel == 0 {
+		return 0
+	}
+	distance := math.Mod(seconds*m.options.Speed, 2*travel)
+	if distance > travel {
+		distance = 2*travel - distance
+	}
+	return right - distance
 }
 
 func (m *Marquee) colorAt(seconds float64) color.RGBA {

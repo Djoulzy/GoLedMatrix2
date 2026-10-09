@@ -15,18 +15,21 @@ import (
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 	"github.com/Djoulzy/GoLedMatrix2/internal/marquee"
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
+	"github.com/Djoulzy/GoLedMatrix2/internal/thermal"
 )
 
 const ProtocolVersion = "1"
 
 type API struct {
-	width     int
-	height    int
-	frameSize int
-	backend   string
-	renderer  *render.Renderer
-	startedAt time.Time
-	baseURLs  []string
+	width           int
+	height          int
+	frameSize       int
+	backend         string
+	renderer        *render.Renderer
+	startedAt       time.Time
+	baseURLs        []string
+	baseURLProvider func() []string
+	temperatures    func() thermal.Stats
 
 	technicalFrame    func(Info) (frame.Frame, error)
 	technicalDuration time.Duration
@@ -38,16 +41,17 @@ type API struct {
 }
 
 type Info struct {
-	ProtocolVersion string       `json:"protocol_version"`
-	Width           int          `json:"width"`
-	Height          int          `json:"height"`
-	PixelFormat     string       `json:"pixel_format"`
-	FrameBytes      int          `json:"frame_bytes"`
-	Backend         string       `json:"backend"`
-	BaseURLs        []string     `json:"base_urls"`
-	StartedAt       time.Time    `json:"started_at"`
-	UptimeSeconds   int64        `json:"uptime_seconds"`
-	Stats           render.Stats `json:"stats"`
+	ProtocolVersion string        `json:"protocol_version"`
+	Width           int           `json:"width"`
+	Height          int           `json:"height"`
+	PixelFormat     string        `json:"pixel_format"`
+	FrameBytes      int           `json:"frame_bytes"`
+	Backend         string        `json:"backend"`
+	BaseURLs        []string      `json:"base_urls"`
+	StartedAt       time.Time     `json:"started_at"`
+	UptimeSeconds   int64         `json:"uptime_seconds"`
+	Stats           render.Stats  `json:"stats"`
+	System          thermal.Stats `json:"system"`
 }
 
 type Option func(*API) error
@@ -62,6 +66,31 @@ type ClockState struct {
 	Mode   string `json:"mode"`
 	Color1 string `json:"color1"`
 	Color2 string `json:"color2"`
+}
+
+// WithTemperatures supplies cached system temperature readings. The provider
+// must be safe for concurrent calls and return an independent snapshot.
+func WithTemperatures(provider func() thermal.Stats) Option {
+	return func(api *API) error {
+		if provider == nil {
+			return errors.New("temperature provider is required")
+		}
+		api.temperatures = provider
+		return nil
+	}
+}
+
+// WithBaseURLs resolves current network addresses for each information request
+// and technical display, instead of retaining a startup snapshot. The provider
+// must be safe to call concurrently.
+func WithBaseURLs(provider func() []string) Option {
+	return func(api *API) error {
+		if provider == nil {
+			return errors.New("base URL provider is required")
+		}
+		api.baseURLProvider = provider
+		return nil
+	}
 }
 
 func WithTechnicalDisplay(
@@ -160,6 +189,17 @@ func (a *API) info(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *API) currentInfo() Info {
+	baseURLs := a.baseURLs
+	if a.baseURLProvider != nil {
+		baseURLs = a.baseURLProvider()
+	}
+	system := thermal.Stats{Temperatures: []thermal.Temperature{}}
+	if a.temperatures != nil {
+		system = a.temperatures()
+		if system.Temperatures == nil {
+			system.Temperatures = []thermal.Temperature{}
+		}
+	}
 	return Info{
 		ProtocolVersion: ProtocolVersion,
 		Width:           a.width,
@@ -167,10 +207,11 @@ func (a *API) currentInfo() Info {
 		PixelFormat:     frame.PixelFormat,
 		FrameBytes:      a.frameSize,
 		Backend:         a.backend,
-		BaseURLs:        append([]string(nil), a.baseURLs...),
+		BaseURLs:        append([]string(nil), baseURLs...),
 		StartedAt:       a.startedAt,
 		UptimeSeconds:   int64(time.Since(a.startedAt).Seconds()),
 		Stats:           a.renderer.Stats(),
+		System:          system,
 	}
 }
 

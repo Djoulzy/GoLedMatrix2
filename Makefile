@@ -1,14 +1,19 @@
 BIN_DIR := bin
-RPI_HOST ?= led@192.168.0.130
+RPI_HOST ?= led@192.168.0.107
 RPI_CONFIG ?= config.toml
 RPI_SSH_PORT ?= 22
 RPI_HEALTH_URL ?= http://127.0.0.1:8080/healthz
 RPI_REMOTE_PATH ?= /usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
 
-.PHONY: test build build-server build-client run-server native build-rpi deploy-rpi check-deploy-scripts
+.PHONY: test test-rpi-binding build build-server build-client run-server native build-rpi deploy-rpi check-deploy-scripts
 
 test:
 	go test -race ./...
+	$(MAKE) test-rpi-binding
+
+# Exercise the production CGO adapter against a fake C driver, without GPIO.
+test-rpi-binding:
+	CGO_ENABLED=1 go test -race -tags rpistub ./internal/display
 
 build: build-server build-client
 

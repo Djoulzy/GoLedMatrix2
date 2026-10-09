@@ -19,6 +19,7 @@ import (
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 	"github.com/Djoulzy/GoLedMatrix2/internal/marquee"
 	"github.com/Djoulzy/GoLedMatrix2/internal/server"
+	"github.com/Djoulzy/GoLedMatrix2/internal/thermal"
 )
 
 func TestIndexAndServerInfo(t *testing.T) {
@@ -38,6 +39,35 @@ func TestIndexAndServerInfo(t *testing.T) {
 	handler.ServeHTTP(info, httptest.NewRequest(http.MethodGet, "/api/info", nil))
 	if info.Code != http.StatusOK || !bytes.Contains(info.Body.Bytes(), []byte(`"width":2`)) {
 		t.Fatalf("info response = %d %q", info.Code, info.Body.String())
+	}
+}
+
+func TestTemperatureInfoProxy(t *testing.T) {
+	sampledAt := time.Now().UTC()
+	matrix := &fakeMatrixClient{info: testInfo()}
+	matrix.info.System = thermal.Stats{
+		Temperatures: []thermal.Temperature{{Sensor: "thermal_zone2", Name: "cpu-thermal", Celsius: 49.25}},
+		SampledAt:    &sampledAt,
+	}
+	handler := newHandler(matrix)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/info", nil))
+	var got server.Info
+	if response.Code != http.StatusOK {
+		t.Fatalf("temperature proxy = %d %s", response.Code, response.Body)
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.System.Temperatures) != 1 || got.System.Temperatures[0] != matrix.info.System.Temperatures[0] || got.System.SampledAt == nil || !got.System.SampledAt.Equal(sampledAt) {
+		t.Fatalf("proxy lost temperatures: %+v", got.System)
+	}
+	index := httptest.NewRecorder()
+	handler.ServeHTTP(index, httptest.NewRequest(http.MethodGet, "/", nil))
+	for _, element := range []string{`id="temperatures"`, `id="temperature-status"`} {
+		if !bytes.Contains(index.Body.Bytes(), []byte(element)) {
+			t.Fatalf("temperature panel missing %s", element)
+		}
 	}
 }
 
@@ -76,7 +106,7 @@ func TestMarqueeCommand(t *testing.T) {
 	matrix := &fakeMatrixClient{info: testInfo()}
 	handler := newHandler(matrix)
 	request := httptest.NewRequest(http.MethodPost, "/api/marquee", bytes.NewBufferString(
-		`{"text":"Bonjour à tous !","font":"bold","size":20,"color":"#abcdef","speed":45,"color_cycle":["#ff0000","#00ff00"],"cycle_seconds":3}`,
+		`{"text":"Bonjour à tous !","font":"bold","size":20,"color":"#abcdef","speed":45,"bounce":true,"vertical_bounce":true,"vertical_bounce_seconds":2.5,"color_cycle":["#ff0000","#00ff00"],"cycle_seconds":3}`,
 	))
 	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
@@ -85,15 +115,23 @@ func TestMarqueeCommand(t *testing.T) {
 		t.Fatalf("marquee response = %d %s", response.Code, response.Body)
 	}
 	got := matrix.marquee
-	if got.Text != "Bonjour à tous !" || got.Font != "bold" || got.Size != 20 || got.Color != "#ABCDEF" || got.Speed != 45 || len(got.ColorCycle) != 2 || got.CycleSeconds != 3 {
+	if got.Text != "Bonjour à tous !" || got.Font != "bold" || got.Size != 20 || got.Color != "#ABCDEF" || got.Speed != 45 || !got.Bounce || len(got.ColorCycle) != 2 || got.CycleSeconds != 3 {
 		t.Fatalf("marquee command lost settings: %+v", got)
 	}
-	request = httptest.NewRequest(http.MethodPost, "/api/marquee", bytes.NewBufferString(`{"text":"test","size":-1}`))
-	request.Header.Set("Content-Type", "application/json")
-	response = httptest.NewRecorder()
-	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest || matrix.marquee.Text != got.Text {
-		t.Fatalf("invalid command forwarded: %d %s", response.Code, response.Body)
+	if !got.VerticalBounce || got.VerticalBounceSeconds != 2.5 {
+		t.Fatalf("marquee command lost vertical motion: %+v", got)
+	}
+	for _, body := range []string{
+		`{"text":"test","size":-1}`, `{"text":"test","vertical_bounce":"true"}`,
+		`{"text":"test","vertical_bounce":true,"vertical_bounce_seconds":-1}`,
+	} {
+		request = httptest.NewRequest(http.MethodPost, "/api/marquee", bytes.NewBufferString(body))
+		request.Header.Set("Content-Type", "application/json")
+		response = httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || matrix.marquee.Text != got.Text {
+			t.Fatalf("invalid command forwarded: %d %s", response.Code, response.Body)
+		}
 	}
 }
 
@@ -125,8 +163,11 @@ func TestMarqueeFontCatalogueAndAssetCommand(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusAccepted || matrix.marquee.Font != "marquee/Flashback.ttf" {
+	if response.Code != http.StatusAccepted || matrix.marquee.Font != "marquee/Flashback.ttf" || matrix.marquee.Bounce {
 		t.Fatalf("asset font command = %d %s, font %q", response.Code, response.Body, matrix.marquee.Font)
+	}
+	if matrix.marquee.VerticalBounce || matrix.marquee.VerticalBounceSeconds != 0 {
+		t.Fatalf("default command must not enable vertical motion: %+v", matrix.marquee)
 	}
 }
 

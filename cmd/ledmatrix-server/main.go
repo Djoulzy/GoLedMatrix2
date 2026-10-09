@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -24,6 +23,7 @@ import (
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
 	"github.com/Djoulzy/GoLedMatrix2/internal/server"
 	"github.com/Djoulzy/GoLedMatrix2/internal/technical"
+	"github.com/Djoulzy/GoLedMatrix2/internal/thermal"
 )
 
 type options struct {
@@ -223,7 +223,12 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 			return err
 		}
 	}
-	baseURLs := advertisedBaseURLs(listen)
+	listener, err := net.Listen("tcp", listen)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", listen, err)
+	}
+	defer listener.Close()
+	boundAddress := listener.Addr().String()
 	animationStore, err := animation.NewStore(cfg.config.Animation.Directory)
 	if err != nil {
 		return err
@@ -231,8 +236,12 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 	animationPlayer := animation.NewPlayer(ctx, animationStore, renderer, width, height)
 	marqueePlayer := marquee.NewPlayer(ctx, renderer)
 	defer marqueePlayer.Stop()
-	apiOptions := make([]server.Option, 0, 4)
+	temperatures := thermal.New()
+	go temperatures.Run(ctx)
+	apiOptions := make([]server.Option, 0, 6)
 	apiOptions = append(apiOptions,
+		server.WithTemperatures(temperatures.Snapshot),
+		server.WithBaseURLs(func() []string { return advertisedBaseURLs(boundAddress) }),
 		server.WithClockDisplay(func(selection server.ClockSelection) (server.ClockState, error) {
 			state, err := clockController.Activate(selection)
 			if err != nil {
@@ -249,7 +258,7 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 	)
 	if seconds := cfg.config.HTTP.InfoDisplaySeconds; seconds > 0 {
 		apiOptions = append(apiOptions, server.WithTechnicalDisplay(
-			baseURLs,
+			nil,
 			time.Duration(seconds)*time.Second,
 			func(info server.Info) (frame.Frame, error) {
 				baseURL := ""
@@ -277,10 +286,6 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
-	listener, err := net.Listen("tcp", listen)
-	if err != nil {
-		return fmt.Errorf("listen on %s: %w", listen, err)
-	}
 	if cfg.config.HTTP.InfoDisplaySeconds > 0 {
 		if err := api.ShowTechnicalInfo(); err != nil {
 			slog.Warn("unable to display startup technical information", "error", err)
@@ -289,7 +294,7 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 	go renderer.Run(ctx)
 	errs := make(chan error, 1)
 	go func() {
-		slog.Info("matrix server listening", "address", listen, "backend", backendName, "width", width, "height", height)
+		slog.Info("matrix server listening", "address", boundAddress, "backend", backendName, "width", width, "height", height)
 		errs <- httpServer.Serve(listener)
 	}()
 
@@ -413,41 +418,6 @@ func (c *clockController) Activate(selection server.ClockSelection) (server.Cloc
 		Color1: matrixclock.FormatColor(palette.Color1),
 		Color2: matrixclock.FormatColor(palette.Color2),
 	}, nil
-}
-
-func advertisedBaseURLs(listen string) []string {
-	host, port, err := net.SplitHostPort(listen)
-	if err != nil {
-		return nil
-	}
-	if host != "" && net.ParseIP(host) == nil {
-		return []string{"http://" + net.JoinHostPort(host, port)}
-	}
-	if parsed := net.ParseIP(host); parsed != nil && !parsed.IsUnspecified() {
-		return []string{"http://" + net.JoinHostPort(host, port)}
-	}
-
-	var ipv4, ipv6 []string
-	addresses, _ := net.InterfaceAddrs()
-	for _, address := range addresses {
-		ip, _, err := net.ParseCIDR(address.String())
-		if err != nil || !ip.IsGlobalUnicast() || ip.IsLoopback() {
-			continue
-		}
-		url := "http://" + net.JoinHostPort(ip.String(), port)
-		if ip.To4() != nil {
-			ipv4 = append(ipv4, url)
-		} else {
-			ipv6 = append(ipv6, url)
-		}
-	}
-	sort.Strings(ipv4)
-	sort.Strings(ipv6)
-	result := append(ipv4, ipv6...)
-	if len(result) == 0 {
-		result = []string{"http://" + net.JoinHostPort("127.0.0.1", port)}
-	}
-	return result
 }
 
 func openDisplay(cfg options) (display.Display, string, error) {

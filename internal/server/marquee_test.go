@@ -60,12 +60,20 @@ func TestMarqueeDefaultsAndInvalidRequests(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &state); err != nil {
 		t.Fatal(err)
 	}
-	if state.Font != "regular" || state.Size != 16 || state.Color != "#FFFFFF" || state.Speed != 30 || state.CycleSeconds != 6 {
+	if state.Font != "regular" || state.Size != 16 || state.Color != "#FFFFFF" || state.Speed != 30 || state.Bounce || state.CycleSeconds != 6 {
 		t.Fatalf("defaults = %+v", state)
+	}
+	if state.VerticalBounce || state.VerticalBounceSeconds != 0 {
+		t.Fatalf("vertical motion must be opt-in: %+v", state)
 	}
 	for _, body := range []string{
 		`{`, `{}`, `null`, `{"text":"test","size":257}`, `{"text":"test","font":"bad"}`,
 		`{"text":"test","color_cycle":["#ff0000"]}`, `{"text":"test","unknown":1}`,
+		`{"text":"test","bounce":"true"}`, `{"text":"test","bounce":1}`,
+		`{"text":"test","vertical_bounce":"true"}`, `{"text":"test","vertical_bounce_seconds":"4"}`,
+		`{"text":"test","vertical_bounce":true,"vertical_bounce_seconds":-1}`,
+		`{"text":"test","vertical_bounce":true,"vertical_bounce_seconds":0.05}`,
+		`{"text":"test","vertical_bounce":true,"vertical_bounce_seconds":3601}`,
 		`{"text":"test"} {}`, `{"text":"test"} trailing`,
 	} {
 		if response := marqueeRequest(api, body); response.Code != http.StatusBadRequest {
@@ -80,11 +88,57 @@ func TestMarqueeDefaultsAndInvalidRequests(t *testing.T) {
 	}
 }
 
+func TestMarqueeBounceOption(t *testing.T) {
+	api, _ := marqueeAPI(t)
+	for _, bounce := range []bool{true, false} {
+		body, err := json.Marshal(marquee.Options{Text: "Bonjour", Bounce: bounce})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := marqueeRequest(api, string(body))
+		var state marquee.Options
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("bounce %v = %d %s", bounce, response.Code, response.Body)
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &state); err != nil {
+			t.Fatal(err)
+		}
+		if state.Bounce != bounce {
+			t.Fatalf("bounce %v returned %+v", bounce, state)
+		}
+	}
+}
+
+func TestMarqueeVerticalBounceOptions(t *testing.T) {
+	api, _ := marqueeAPI(t)
+	for _, tc := range []struct {
+		body   string
+		bounce bool
+		period float64
+	}{
+		{`{"text":"Bonjour","vertical_bounce":true}`, false, 4},
+		{`{"text":"Bonjour","vertical_bounce":true,"vertical_bounce_seconds":2.5}`, false, 2.5},
+		{`{"text":"Bonjour","bounce":true,"vertical_bounce":true,"vertical_bounce_seconds":3}`, true, 3},
+	} {
+		response := marqueeRequest(api, tc.body)
+		if response.Code != http.StatusAccepted {
+			t.Fatalf("vertical bounce = %d %s", response.Code, response.Body)
+		}
+		var state marquee.Options
+		if err := json.Unmarshal(response.Body.Bytes(), &state); err != nil {
+			t.Fatal(err)
+		}
+		if !state.VerticalBounce || state.VerticalBounceSeconds != tc.period || state.Bounce != tc.bounce {
+			t.Fatalf("vertical bounce lost settings: %+v", state)
+		}
+	}
+}
+
 func TestMarqueeReplacedByOtherModes(t *testing.T) {
 	for _, mode := range []string{"frame", "clock", "animation"} {
 		t.Run(mode, func(t *testing.T) {
 			api, target := marqueeAPI(t)
-			response := marqueeRequest(api, `{"text":"Bonjour","speed":500}`)
+			response := marqueeRequest(api, `{"text":"Bonjour","speed":500,"bounce":true,"vertical_bounce":true}`)
 			if response.Code != http.StatusAccepted {
 				t.Fatal(response.Body)
 			}

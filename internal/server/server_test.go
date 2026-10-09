@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/Djoulzy/GoLedMatrix2/internal/display"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
+	"github.com/Djoulzy/GoLedMatrix2/internal/thermal"
 )
 
 func testAPI(t *testing.T) (*API, *display.Memory, context.CancelFunc) {
@@ -49,6 +51,96 @@ func TestInfo(t *testing.T) {
 	}
 	if got.Width != 2 || got.Height != 1 || got.FrameBytes != 6 || got.PixelFormat != frame.PixelFormat {
 		t.Fatalf("unexpected info: %+v", got)
+	}
+}
+
+func TestInfoTemperatures(t *testing.T) {
+	api, _, cancel := testAPI(t)
+	defer cancel()
+	if err := WithTemperatures(nil)(api); err == nil {
+		t.Fatal("nil temperature provider accepted")
+	}
+	sampledAt := time.Now().UTC()
+	system := thermal.Stats{
+		Temperatures: []thermal.Temperature{{Sensor: "thermal_zone7", Name: "cpu-thermal", Celsius: 48.562}},
+		SampledAt:    &sampledAt,
+	}
+	if err := WithTemperatures(func() thermal.Stats { return system })(api); err != nil {
+		t.Fatal(err)
+	}
+	for _, temperatures := range [][]thermal.Temperature{system.Temperatures, {}, nil} {
+		system.Temperatures = temperatures
+		response := httptest.NewRecorder()
+		api.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/info", nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("temperature info = %d %s", response.Code, response.Body)
+		}
+		var got Info
+		if err := json.Unmarshal(response.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.System.SampledAt == nil || !got.System.SampledAt.Equal(sampledAt) || got.System.Temperatures == nil || len(got.System.Temperatures) != len(temperatures) {
+			t.Fatalf("system info = %+v", got.System)
+		}
+		if len(temperatures) > 0 && got.System.Temperatures[0] != temperatures[0] {
+			t.Fatalf("temperature = %+v", got.System.Temperatures)
+		}
+	}
+}
+
+func TestInfoWithoutTemperatureProvider(t *testing.T) {
+	api, _, cancel := testAPI(t)
+	defer cancel()
+	response := httptest.NewRecorder()
+	api.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/info", nil))
+	if !bytes.Contains(response.Body.Bytes(), []byte(`"system":{"temperatures":[]}`)) {
+		t.Fatalf("unavailable temperatures = %s", response.Body)
+	}
+}
+
+func TestInfoAndTechnicalDisplayRefreshNetworkAddresses(t *testing.T) {
+	target, err := display.NewMemory(2, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderer := render.New(target)
+	var addresses atomic.Value
+	addresses.Store([]string{"http://192.168.0.18:8080"})
+	var displayedURL string
+	api, err := New(2, 1, "memory", renderer,
+		WithBaseURLs(func() []string { return addresses.Load().([]string) }),
+		WithTechnicalDisplay([]string{"http://obsolete.example:8080"}, time.Second,
+			func(info Info) (frame.Frame, error) {
+				displayedURL = info.BaseURLs[0]
+				return frame.New(2, 1, make([]byte, 6))
+			}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, url := range []string{"http://192.168.0.18:8080", "http://192.168.0.42:8080"} {
+		addresses.Store([]string{url})
+		if err := api.ShowTechnicalInfo(); err != nil {
+			t.Fatal(err)
+		}
+		if displayedURL != url {
+			t.Fatalf("displayed URL = %q, want current URL %q", displayedURL, url)
+		}
+		response := httptest.NewRecorder()
+		api.Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/info", nil))
+		var info Info
+		if err := json.Unmarshal(response.Body.Bytes(), &info); err != nil {
+			t.Fatal(err)
+		}
+		if len(info.BaseURLs) != 1 || info.BaseURLs[0] != url {
+			t.Fatalf("info URLs = %v, want current URL %q", info.BaseURLs, url)
+		}
+	}
+	// Callers must not be able to mutate the provider's stored address slice.
+	info := api.currentInfo()
+	info.BaseURLs[0] = "changed"
+	if api.currentInfo().BaseURLs[0] == "changed" {
+		t.Fatal("info leaked the provider's address slice")
 	}
 }
 
