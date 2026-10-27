@@ -12,10 +12,23 @@ function response(payload, status = 200) {
 }
 
 async function settle() {
-  for (let i = 0; i < 20; i++) await Promise.resolve();
+  for (let i = 0; i < 60; i++) await Promise.resolve();
 }
 
-async function harness(info, {confirmed = true, shutdown, infoRequest} = {}) {
+// Only the Headers operations used by app.js are needed by the fetch model.
+class TestHeaders {
+  constructor(headers = {}) {
+    this.values = new Map(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
+  }
+  set(key, value) { this.values.set(key.toLowerCase(), value); }
+  get(key) { return this.values.get(key.toLowerCase()) ?? null; }
+}
+
+const serverA = "http://matrix-a.test:7272";
+const serverB = "http://matrix-b.test:7272";
+
+async function harness(info, {confirmed = true, shutdown, infoRequest, brightnessRequest,
+  servers = [{url: serverA}], infos = {}} = {}) {
   const elements = new Map();
   function element(selector) {
     if (elements.has(selector)) return elements.get(selector);
@@ -37,6 +50,7 @@ async function harness(info, {confirmed = true, shutdown, infoRequest} = {}) {
   element("#marquee-vertical-bounce").value = "false";
   const requests = [], confirmations = [], intervals = [];
   const context = vm.createContext({
+    Headers: TestHeaders,
     document: {
       querySelector: element,
       querySelectorAll: () => buttonSelectors.map(element),
@@ -50,7 +64,10 @@ async function harness(info, {confirmed = true, shutdown, infoRequest} = {}) {
     async fetch(path, options = {}) {
       requests.push({path, options});
       if (path === "/api/marquee/fonts") return response([]);
-      if (path === "/api/info") return infoRequest ? infoRequest() : response(info);
+      if (path === "/api/servers") return response({servers, initial_server: servers[0]?.url || "", scanning: false});
+      const url = options.headers?.get("X-GoLedMatrix-Server");
+      if (path === "/api/info") return infoRequest ? infoRequest(url) : response(infos[url] || info);
+      if (path === "/api/brightness") return brightnessRequest ? brightnessRequest() : response(JSON.parse(options.body));
       if (path === "/api/shutdown") return shutdown ? shutdown() : response({status: "shutting_down"}, 202);
       throw new Error(`Unexpected request: ${path}`);
     },
@@ -66,12 +83,23 @@ async function harness(info, {confirmed = true, shutdown, infoRequest} = {}) {
       await result;
       await settle();
     },
+    async changeServer(url) {
+      const target = element("#server-select");
+      target.value = url;
+      target.listeners.get("change")({target});
+      await settle();
+    },
+    async submitBrightness(value) {
+      element("#brightness").value = value;
+      await element("#brightness-form").listeners.get("submit")({preventDefault() {}});
+      await settle();
+    },
     commands: () => requests.filter(request => request.path === "/api/shutdown"),
     buttons: () => buttonSelectors.map(element),
   };
 }
 
-const rpi = {backend: "rpi", width: 128, height: 128, shutdown: {power_off: true}};
+const rpi = {backend: "rpi", width: 128, height: 128, brightness: 35, shutdown: {power_off: true}};
 let count = 0;
 
 // Cancellation leaves both the server and the UI unchanged.
@@ -97,7 +125,7 @@ let count = 0;
   assert.equal(h.element("#refresh").disabled, true);
   assert.ok(h.buttons().every(button => button.disabled));
   assert.deepEqual(JSON.parse(h.commands()[0].options.body), {power_off: true});
-  assert.equal(h.commands()[0].options.headers["Content-Type"], "application/json");
+  assert.equal(h.commands()[0].options.headers.get("Content-Type"), "application/json");
   const requestCount = h.requests.length;
   await h.intervals[0]();
   assert.equal(h.requests.length, requestCount);
@@ -180,6 +208,70 @@ for (const info of [
   await h.click("#refresh");
   assert.equal(h.element("#connection-label").textContent, "Serveur hors ligne");
   assert.ok(h.buttons().every(button => button.disabled));
+  count++;
+}
+
+// Shutdown follows the selected target and leaves other matrices usable.
+{
+  const h = await harness(rpi, {servers: [{url: serverA}, {url: serverB}]});
+  await h.changeServer(serverB);
+  await h.click("#shutdown");
+  assert.equal(h.commands()[0].options.headers.get("X-GoLedMatrix-Server"), serverB);
+  assert.ok(h.confirmations[0].includes(serverB));
+  assert.equal(h.element("#matrix-controls").disabled, true);
+  assert.equal(h.element("#server-select").disabled, false);
+  const requestCount = h.requests.length;
+  await h.submitBrightness(50);
+  assert.equal(h.requests.length, requestCount);
+  await h.changeServer(serverA);
+  assert.equal(h.state.shuttingDown, false);
+  assert.equal(h.state.serverReady, true);
+  assert.equal(h.element("#matrix-controls").disabled, false);
+  assert.equal(h.element("#shutdown").disabled, false);
+  count++;
+}
+
+// Brightness remains functional and locks the target while being applied.
+{
+  let resolveBrightness;
+  const pending = new Promise(resolve => { resolveBrightness = resolve; });
+  const h = await harness(rpi, {brightnessRequest: () => pending});
+  const applied = h.submitBrightness(80);
+  const command = h.requests.find(request => request.path === "/api/brightness");
+  assert.deepEqual(JSON.parse(command.options.body), {brightness: 80});
+  assert.equal(command.options.headers.get("X-GoLedMatrix-Server"), serverA);
+  assert.equal(h.element("#server-select").disabled, true);
+  assert.equal(h.element("#shutdown").disabled, true);
+  await h.click("#shutdown");
+  assert.equal(h.commands().length, 0);
+  resolveBrightness(response({brightness: 80}));
+  await applied;
+  assert.equal(h.state.brightness, 80);
+  assert.equal(h.element("#brightness-value").textContent, "80 %");
+  assert.equal(h.element("#server-select").disabled, false);
+  assert.equal(h.element("#shutdown").disabled, false);
+  count++;
+}
+
+// A previous matrix's late info must not replace the new target's capabilities.
+{
+  let resolveInfo;
+  let pollsA = 0;
+  const memory = {...rpi, backend: "memory", shutdown: {power_off: false}};
+  const h = await harness(rpi, {servers: [{url: serverA}, {url: serverB}], infoRequest: (url) => {
+    if (url === serverB) return response(memory);
+    if (++pollsA === 1) return response(rpi);
+    return new Promise(resolve => { resolveInfo = resolve; });
+  }});
+  const oldPoll = h.intervals[0]();
+  await h.changeServer(serverB);
+  resolveInfo(response(rpi));
+  await oldPoll;
+  assert.equal(h.state.serverInfo.backend, "memory");
+  assert.equal(h.element("#shutdown").textContent, "Arrêter le serveur");
+  await h.click("#shutdown");
+  assert.deepEqual(JSON.parse(h.commands()[0].options.body), {power_off: false});
+  assert.equal(h.commands()[0].options.headers.get("X-GoLedMatrix-Server"), serverB);
   count++;
 }
 

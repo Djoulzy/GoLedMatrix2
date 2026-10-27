@@ -17,20 +17,35 @@ import (
 
 	"github.com/Djoulzy/GoLedMatrix2/internal/client"
 	appconfig "github.com/Djoulzy/GoLedMatrix2/internal/config"
+	"github.com/Djoulzy/GoLedMatrix2/internal/display"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 )
 
 type shutdownDisplay struct {
-	closed    atomic.Bool
-	closes    atomic.Int32
-	active    atomic.Int32
-	badClose  atomic.Bool
-	started   chan struct{}
-	startOnce sync.Once
-	closeErr  error
+	brightness atomic.Int32
+	closed     atomic.Bool
+	closes     atomic.Int32
+	active     atomic.Int32
+	badClose   atomic.Bool
+	started    chan struct{}
+	startOnce  sync.Once
+	closeErr   error
 }
 
 func (d *shutdownDisplay) Geometry() (int, int) { return 64, 32 }
+
+func (d *shutdownDisplay) Brightness() int { return int(d.brightness.Load()) }
+
+func (d *shutdownDisplay) SetBrightness(ctx context.Context, value int) error {
+	if err := display.ValidateBrightness(value); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	d.brightness.Store(int32(value))
+	return nil
+}
 
 func (d *shutdownDisplay) Present(ctx context.Context, _ frame.Frame) error {
 	d.active.Add(1)

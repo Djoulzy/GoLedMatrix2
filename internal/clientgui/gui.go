@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Djoulzy/GoLedMatrix2/internal/animation"
 	"github.com/Djoulzy/GoLedMatrix2/internal/client"
@@ -28,6 +29,7 @@ var staticFiles embed.FS
 
 type matrixClient interface {
 	Info(context.Context) (server.Info, error)
+	SetBrightness(context.Context, int) (server.BrightnessState, error)
 	Send(context.Context, frame.Frame) (uint64, error)
 	DisplayInfo(context.Context) error
 	Shutdown(context.Context, bool) error
@@ -38,31 +40,46 @@ type matrixClient interface {
 }
 
 type GUI struct {
-	client matrixClient
+	client   matrixClient
+	registry *serverRegistry
 }
 
 func New(api *client.Client) (http.Handler, error) {
 	if api == nil {
 		return nil, errors.New("matrix client is required")
 	}
-	return newHandler(api), nil
+	registry, err := newServerRegistry(context.Background(), DiscoveryOptions{ServerURL: api.ServerURL(), Timeout: 2 * time.Minute}, client.Scan)
+	if err != nil {
+		return nil, err
+	}
+	registry.known[registry.pinned] = api
+	return (&GUI{registry: registry}).handler(), nil
 }
 
 func newHandler(api matrixClient) http.Handler {
 	gui := &GUI{client: api}
+	return gui.handler()
+}
+
+func (gui *GUI) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", serveIndex)
 	mux.Handle("GET /static/", http.FileServer(http.FS(staticFiles)))
-	mux.HandleFunc("GET /api/info", gui.info)
-	mux.HandleFunc("POST /api/color", gui.color)
-	mux.HandleFunc("POST /api/image", gui.image)
-	mux.HandleFunc("POST /api/clock", gui.clock)
-	mux.HandleFunc("POST /api/marquee", gui.marquee)
+	if gui.registry != nil {
+		mux.HandleFunc("GET /api/servers", gui.servers)
+		mux.HandleFunc("POST /api/servers/scan", gui.scanServers)
+	}
+	mux.HandleFunc("GET /api/info", gui.matrixHandler((*GUI).info))
+	mux.HandleFunc("POST /api/brightness", gui.matrixHandler((*GUI).brightness))
+	mux.HandleFunc("POST /api/color", gui.matrixHandler((*GUI).color))
+	mux.HandleFunc("POST /api/image", gui.matrixHandler((*GUI).image))
+	mux.HandleFunc("POST /api/clock", gui.matrixHandler((*GUI).clock))
+	mux.HandleFunc("POST /api/marquee", gui.matrixHandler((*GUI).marquee))
 	mux.HandleFunc("GET /api/marquee/fonts", marqueeFonts)
-	mux.HandleFunc("POST /api/display-info", gui.displayInfo)
-	mux.HandleFunc("POST /api/shutdown", gui.shutdown)
-	mux.HandleFunc("POST /api/animations", gui.uploadAnimation)
-	mux.HandleFunc("POST /api/animations/play", gui.playAnimation)
+	mux.HandleFunc("POST /api/display-info", gui.matrixHandler((*GUI).displayInfo))
+	mux.HandleFunc("POST /api/shutdown", gui.matrixHandler((*GUI).shutdown))
+	mux.HandleFunc("POST /api/animations", gui.matrixHandler((*GUI).uploadAnimation))
+	mux.HandleFunc("POST /api/animations/play", gui.matrixHandler((*GUI).playAnimation))
 	return securityHeaders(mux)
 }
 
@@ -87,6 +104,24 @@ func (g *GUI) info(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+func (g *GUI) brightness(w http.ResponseWriter, r *http.Request) {
+	var request server.BrightnessState
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "Luminosité invalide", err)
+		return
+	}
+	if request.Brightness < 1 || request.Brightness > 100 {
+		writeError(w, http.StatusBadRequest, "Luminosité invalide", errors.New("utiliser un entier de 1 à 100"))
+		return
+	}
+	state, err := g.client.SetBrightness(r.Context(), request.Brightness)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "Réglage de la luminosité impossible", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
 }
 
 func (g *GUI) color(w http.ResponseWriter, r *http.Request) {
@@ -343,6 +378,9 @@ func writeError(w http.ResponseWriter, status int, message string, err error) {
 
 func securityHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		w.Header().Set("Content-Security-Policy",
 			"default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' blob: data:; connect-src 'self'")
 		w.Header().Set("X-Content-Type-Options", "nosniff")

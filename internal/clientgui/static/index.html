@@ -19,6 +19,19 @@
       </div>
     </header>
 
+    <section class="server-card" aria-labelledby="server-heading">
+      <h2 id="server-heading">Serveur LED</h2>
+      <div class="server-controls">
+        <label>Serveur sélectionné
+          <select id="server-select" disabled>
+            <option value="">Recherche de serveurs…</option>
+          </select>
+        </label>
+        <button id="rescan-servers" type="button" disabled>Rechercher les serveurs</button>
+      </div>
+      <p id="discovery-status" class="form-hint" role="status">Chargement des serveurs…</p>
+    </section>
+
     <section class="matrix-card">
       <div>
         <span class="label">Serveur</span>
@@ -44,6 +57,22 @@
       <p>Capteurs internes · actualisation toutes les 5 secondes</p>
       <dl id="temperatures"></dl>
       <p id="temperature-status" role="status">Indisponible</p>
+    </section>
+
+    <fieldset id="matrix-controls" aria-label="Commandes du serveur sélectionné" disabled>
+    <section class="brightness-card" aria-labelledby="brightness-heading">
+      <h2 id="brightness-heading">Luminosité</h2>
+      <p>Ajustez l’intensité de l’affichage, de 1 à 100 %.</p>
+      <form id="brightness-form">
+        <label for="brightness">Intensité lumineuse
+          <output id="brightness-value" for="brightness">—</output>
+        </label>
+        <div class="brightness-controls">
+          <input id="brightness" name="brightness" type="range" min="1" max="100" step="1" value="100" disabled>
+          <button type="submit" disabled>Appliquer</button>
+        </div>
+        <p id="brightness-status" class="form-hint" role="status">Connexion au serveur…</p>
+      </form>
     </section>
 
     <main>
@@ -232,6 +261,7 @@
         <p id="shutdown-hint" class="form-hint">Connexion au serveur requise pour l’arrêt.</p>
       </section>
     </main>
+    </fieldset>
 
     <footer>
       <span id="activity">Prêt.</span>

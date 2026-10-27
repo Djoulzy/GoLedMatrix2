@@ -56,6 +56,49 @@ func TestInfoAndSend(t *testing.T) {
 	if sequence != 1 {
 		t.Fatalf("sequence = %d, want 1", sequence)
 	}
+	state, err := client.SetBrightness(ctx, 35)
+	if err != nil || state.Brightness != 35 {
+		t.Fatalf("set brightness = %+v, %v", state, err)
+	}
+	info, err = client.Info(ctx)
+	if err != nil || info.Brightness != 35 || memory.Brightness() != 35 {
+		t.Fatalf("brightness lost in protocol: %+v, %v", info, err)
+	}
+}
+
+func TestSetBrightnessValidatesAndReportsErrors(t *testing.T) {
+	api, _ := New("http://matrix.test", time.Second)
+	calls := 0
+	api.http.Transport = handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Method != http.MethodPut || r.URL.Path != "/v1/brightness" || r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("unexpected brightness request: %s %s", r.Method, r.URL)
+		}
+		var state server.BrightnessState
+		if json.NewDecoder(r.Body).Decode(&state) != nil || state.Brightness != 35 {
+			t.Errorf("invalid request body: %+v", state)
+		}
+		http.Error(w, "driver unavailable", http.StatusServiceUnavailable)
+	})}
+	for _, value := range []int{-1, 0, 101} {
+		if _, err := api.SetBrightness(context.Background(), value); err == nil {
+			t.Fatalf("invalid brightness accepted: %d", value)
+		}
+	}
+	if calls != 0 {
+		t.Fatal("invalid brightness sent to server")
+	}
+	if _, err := api.SetBrightness(context.Background(), 35); err == nil || calls != 1 {
+		t.Fatalf("server error ignored: %v", err)
+	}
+	for _, body := range []string{`{`, `{}`, `{"brightness":101}`} {
+		api.http.Transport = handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(body))
+		})}
+		if _, err := api.SetBrightness(context.Background(), 35); err == nil {
+			t.Fatalf("bad server response accepted: %s", body)
+		}
+	}
 }
 
 func TestInfoFromOlderServerWithoutTemperatures(t *testing.T) {

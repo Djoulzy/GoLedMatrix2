@@ -6,6 +6,18 @@ const state = {
   serverInfo: null,
   shuttingDown: false,
   controlsDisabled: false,
+  brightness: null,
+  brightnessDirty: false,
+  brightnessSaving: false,
+  brightnessRevision: 0,
+  serverURL: "",
+  serverRevision: 0,
+  serverReady: false,
+  serverCount: 0,
+  serverInventoryKey: "",
+  scanning: true,
+  scanRequested: false,
+  commands: 0,
 };
 
 function setActivity(message) {
@@ -21,20 +33,134 @@ function toast(message, error = false) {
 }
 
 async function request(path, options = {}) {
+  const matrixRequest = !["/api/servers", "/api/servers/scan", "/api/marquee/fonts"].includes(path);
+  const command = matrixRequest && options.method && options.method !== "GET";
+  const headers = new Headers(options.headers);
+  if (matrixRequest) {
+    if (!state.serverURL) throw new Error("Choisissez un serveur LED.");
+    headers.set("X-GoLedMatrix-Server", state.serverURL);
+  }
+  if (command) {
+    state.commands++;
+    updateServerControls();
+  }
   state.busy++;
   document.body.classList.add("busy");
   try {
-    const response = await fetch(path, options);
+    const response = await fetch(path, {...options, headers});
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(payload.detail || payload.error || `Erreur HTTP ${response.status}`);
     }
     return payload;
   } finally {
+    if (command) {
+      state.commands--;
+      updateServerControls();
+    }
     state.busy--;
     if (!state.busy) document.body.classList.remove("busy");
   }
 }
+
+function updateServerControls() {
+  $("#server-select").disabled = state.commands > 0 || state.serverCount === 0;
+  $("#rescan-servers").disabled = state.scanning || state.scanRequested;
+  $("#matrix-controls").disabled = !state.serverReady || state.commands > 0 || state.shuttingDown || state.controlsDisabled;
+  updateShutdownButton();
+}
+
+async function selectServer(url) {
+  if (url === state.serverURL) return;
+  state.serverURL = url;
+  state.serverRevision++;
+  state.serverReady = false;
+  state.serverInfo = null;
+  state.shuttingDown = false;
+  $("#refresh").disabled = false;
+  state.geometry = null;
+  state.brightnessDirty = false;
+  state.brightnessRevision++;
+  for (const id of ["backend", "geometry", "format", "uptime"]) $("#" + id).textContent = "—";
+  $("#stats").textContent = "—";
+  $("#connection").className = "connection offline";
+  $("#connection-label").textContent = "Connexion…";
+  displayTemperatures(null, true);
+  displayBrightness(null);
+  $("#brightness-value").textContent = "—";
+  $("#brightness-status").textContent = "Connexion au serveur…";
+  disableServerControls(false);
+  setActivity(`Connexion à ${url}…`);
+  await refreshInfo(true);
+  if (state.serverURL === url && state.serverReady) setActivity(`Serveur sélectionné : ${url}`);
+}
+
+function displayServers(inventory) {
+  state.scanning = inventory.scanning;
+  const servers = [...inventory.servers];
+  if (state.serverURL && !servers.some((server) => server.url === state.serverURL)) {
+    servers.push({url: state.serverURL, missing: true});
+  }
+  state.serverCount = servers.length;
+  const select = $("#server-select");
+  const inventoryKey = JSON.stringify(servers);
+  if (inventoryKey !== state.serverInventoryKey) {
+    state.serverInventoryKey = inventoryKey;
+    select.replaceChildren();
+    for (const server of servers) {
+      const option = document.createElement("option");
+      option.value = server.url;
+      option.textContent = [server.url, server.backend, server.width && `${server.width} × ${server.height}`,
+        server.missing && "non détecté lors du dernier scan"].filter(Boolean).join(" · ");
+      select.append(option);
+    }
+  }
+  if (servers.length === 0) {
+    select.replaceChildren();
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = state.scanning ? "Recherche de serveurs…" : "Aucun serveur détecté";
+    select.append(option);
+    $("#connection-label").textContent = option.textContent;
+    $("#brightness-status").textContent = "Choisissez un serveur pour régler la luminosité.";
+  }
+  const selected = state.serverURL || inventory.initial_server || servers[0]?.url || "";
+  select.value = selected;
+  $("#discovery-status").textContent = state.scanning ? "Recherche de serveurs en cours…"
+    : inventory.error ? `Recherche incomplète : ${inventory.error}`
+    : inventory.servers.length ? `${inventory.servers.length} adresse(s) disponible(s). Choisissez le serveur à piloter.`
+    : "Aucun serveur détecté. Vérifiez le réseau et relancez la recherche.";
+  updateServerControls();
+  if (selected !== state.serverURL) void selectServer(selected);
+}
+
+async function pollServers() {
+  try {
+    displayServers(await request("/api/servers"));
+  } catch (error) {
+    $("#discovery-status").textContent = `Chargement des serveurs impossible : ${error.message}`;
+    state.scanning = false;
+    updateServerControls();
+  }
+  setTimeout(pollServers, state.scanning ? 1000 : 5000);
+}
+
+$("#server-select").addEventListener("change", (event) => {
+  void selectServer(event.target.value);
+});
+
+$("#rescan-servers").addEventListener("click", async () => {
+  state.scanRequested = true;
+  updateServerControls();
+  try {
+    displayServers(await request("/api/servers/scan", {method: "POST"}));
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    state.scanRequested = false;
+    updateServerControls();
+  }
+});
 
 function humanDuration(seconds) {
   const days = Math.floor(seconds / 86400);
@@ -69,7 +195,8 @@ function updateShutdownButton() {
   const info = state.serverInfo;
   const powerOff = info?.backend === "rpi";
   button.textContent = powerOff ? "Éteindre le Raspberry Pi" : "Arrêter le serveur";
-  button.disabled = state.shuttingDown || !info?.shutdown || (powerOff && !info.shutdown.power_off);
+  button.disabled = !state.serverReady || state.commands > 0 || state.shuttingDown || state.controlsDisabled
+    || !info?.shutdown || (powerOff && !info.shutdown.power_off);
   if (!info) {
     hint.textContent = "Connexion au serveur requise pour l’arrêt.";
   } else if (!info.shutdown) {
@@ -86,15 +213,17 @@ function updateShutdownButton() {
 function disableServerControls(disabled) {
   state.controlsDisabled = disabled;
   for (const button of document.querySelectorAll("main button")) button.disabled = disabled;
-  updateShutdownButton();
+  updateServerControls();
 }
 
 async function refreshInfo(silent = false) {
-  if (state.shuttingDown) return;
+  if (!state.serverURL || state.shuttingDown) return;
+  const serverRevision = state.serverRevision;
+  const brightnessRevision = state.brightnessRevision;
   try {
     const info = await request("/api/info");
-    // An earlier poll must not overwrite a shutdown accepted in the meantime.
-    if (state.shuttingDown) return;
+    if (serverRevision !== state.serverRevision || state.shuttingDown) return;
+    state.serverReady = true;
     state.serverInfo = info;
     state.geometry = {width: info.width, height: info.height};
     $("#connection").className = "connection online";
@@ -104,22 +233,73 @@ async function refreshInfo(silent = false) {
     $("#format").textContent = info.pixel_format;
     $("#uptime").textContent = humanDuration(info.uptime_seconds);
     displayTemperatures(info.system);
+    if (brightnessRevision === state.brightnessRevision && !state.brightnessSaving) {
+      displayBrightness(info.brightness);
+    }
     const accepted = info.stats?.accepted || 0;
     const rendered = info.stats?.rendered || 0;
     $("#stats").textContent = `${rendered} / ${accepted} trames rendues`;
     if (state.controlsDisabled) disableServerControls(false);
-    else updateShutdownButton();
+    else updateServerControls();
     if (!silent) toast("État du serveur actualisé");
   } catch (error) {
-    if (state.shuttingDown) return;
+    if (serverRevision !== state.serverRevision || state.shuttingDown) return;
     state.serverInfo = null;
+    state.serverReady = false;
     $("#connection").className = "connection offline";
     $("#connection-label").textContent = "Serveur hors ligne";
     displayTemperatures(null, true);
-    updateShutdownButton();
+    if (brightnessRevision === state.brightnessRevision && !state.brightnessSaving) {
+      displayBrightness(null, true);
+    }
+    updateServerControls();
     if (!silent) toast(error.message, true);
   }
 }
+
+function displayBrightness(value, offline = false) {
+  const supported = Number.isInteger(value) && value >= 1 && value <= 100;
+  state.brightness = supported ? value : null;
+  $("#brightness").disabled = !supported || state.brightnessSaving;
+  $("#brightness-form button").disabled = !supported || state.brightnessSaving;
+  $("#brightness-status").textContent = offline
+    ? "Indisponible — serveur hors ligne"
+    : supported ? `Luminosité actuelle : ${value} %` : "Réglage indisponible — mettez à jour le serveur";
+  if (supported && !state.brightnessDirty && !state.brightnessSaving) {
+    $("#brightness").value = value;
+    $("#brightness-value").textContent = `${value} %`;
+  }
+}
+
+$("#brightness").addEventListener("input", (event) => {
+  state.brightnessDirty = true;
+  $("#brightness-value").textContent = `${event.target.value} %`;
+});
+
+$("#brightness-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (state.shuttingDown || state.controlsDisabled || !state.serverReady || state.commands > 0
+    || state.brightnessSaving || state.brightness === null) return;
+  const value = Number($("#brightness").value);
+  state.brightnessSaving = true;
+  state.brightnessRevision++;
+  displayBrightness(state.brightness);
+  try {
+    setActivity("Réglage de la luminosité…");
+    const result = await request("/api/brightness", jsonOptions({brightness: value}));
+    state.brightness = result.brightness;
+    state.brightnessDirty = false;
+    setActivity(`Luminosité réglée à ${result.brightness} %.`);
+    toast("Luminosité appliquée");
+  } catch (error) {
+    setActivity("Le réglage de la luminosité a échoué.");
+    toast(error.message, true);
+  } finally {
+    state.brightnessSaving = false;
+    state.brightnessRevision++;
+    displayBrightness(state.brightness);
+  }
+});
 
 function jsonOptions(body) {
   return {
@@ -283,10 +463,11 @@ $("#display-info").addEventListener("click", async (event) => {
 $("#shutdown").addEventListener("click", async (event) => {
   const button = event.currentTarget;
   if (button.disabled || state.shuttingDown) return;
+  const serverRevision = state.serverRevision;
   const powerOff = state.serverInfo?.backend === "rpi";
   const confirmation = powerOff
-    ? "Éteindre le Raspberry Pi ? Le serveur et la dalle seront arrêtés proprement, puis le système sera éteint. Attendez la fin de l’arrêt avant de débrancher l’alimentation."
-    : "Arrêter proprement le serveur LED ? La machine restera allumée. Il faudra relancer le serveur pour utiliser la matrice.";
+    ? `Éteindre le Raspberry Pi (${state.serverURL}) ? Le serveur et la dalle seront arrêtés proprement, puis le système sera éteint. Attendez la fin de l’arrêt avant de débrancher l’alimentation.`
+    : `Arrêter proprement le serveur LED (${state.serverURL}) ? La machine restera allumée. Il faudra relancer le serveur pour utiliser la matrice.`;
   if (!window.confirm(confirmation)) return;
   state.shuttingDown = true;
   disableServerControls(true);
@@ -296,6 +477,9 @@ $("#shutdown").addEventListener("click", async (event) => {
   setActivity(powerOff ? "Demande d’extinction du Raspberry Pi…" : "Demande d’arrêt du serveur…");
   try {
     await request("/api/shutdown", jsonOptions({power_off: powerOff}));
+    if (serverRevision !== state.serverRevision) return;
+    state.serverReady = false;
+    updateServerControls();
     const message = powerOff ? "Extinction du Raspberry Pi demandée" : "Arrêt du serveur demandé";
     $("#connection-label").textContent = message;
     displayTemperatures(null, true);
@@ -307,13 +491,14 @@ $("#shutdown").addEventListener("click", async (event) => {
     // Keep polling and display commands paused: being offline is expected.
     // The refresh button lets the user reconnect after a subsequent startup.
   } catch (error) {
+    if (serverRevision !== state.serverRevision) return;
     state.shuttingDown = false;
     disableServerControls(false);
     setActivity("L’arrêt a échoué.");
     toast(error.message, true);
     await refreshInfo(true);
   } finally {
-    $("#refresh").disabled = false;
+    if (serverRevision === state.serverRevision) $("#refresh").disabled = false;
   }
 });
 
@@ -336,5 +521,5 @@ for (const [inputSelector, labelSelector] of [
   });
 }
 
-refreshInfo(true);
+pollServers();
 setInterval(() => refreshInfo(true), 5000);

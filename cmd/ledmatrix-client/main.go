@@ -9,11 +9,13 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 	"log"
-	"net/http"
+	"net/netip"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Djoulzy/GoLedMatrix2/internal/client"
@@ -23,7 +25,12 @@ import (
 )
 
 func main() {
-	serverURL := flag.String("server", "http://localhost:8080", "matrix server URL")
+	serverURL := flag.String("server", "", "matrix server URL (default: discover local servers)")
+	scan := flag.Bool("scan", false, "list GoLedMatrix2 servers on local IPv4 networks and exit")
+	scanPort := flag.Int("scan-port", client.DefaultScanPort, "HTTP port for server discovery")
+	scanNetwork := flag.String("scan-network", "", "IPv4 CIDR subnet to scan instead of automatic interface detection")
+	scanTimeout := flag.Duration("scan-timeout", client.DefaultScanTimeout, "timeout for each server discovery probe")
+	brightness := flag.Int("brightness", 0, "set display brightness (1-100 percent)")
 	imagePath := flag.String("image", "", "PNG or JPEG image with the matrix dimensions")
 	solid := flag.String("color", "", "solid color in #RRGGBB form")
 	showInfo := flag.Bool("show-info", false, "temporarily display server connection information")
@@ -45,12 +52,24 @@ func main() {
 	animationName := flag.String("animation-name", "", "stored animation name (defaults to the GIF filename)")
 	playAnimation := flag.String("play-animation", "", "play a previously stored animation")
 	animationLoops := flag.Int("animation-loops", -1, "total loops: 0 infinite, -1 uses the GIF value")
-	gui := flag.Bool("gui", false, "start the browser-based graphical client")
-	guiListen := flag.String("gui-listen", "127.0.0.1:8090", "GUI HTTP listen address")
-	timeout := flag.Duration("timeout", 2*time.Minute, "HTTP request timeout")
+	noGUI := flag.Bool("no-gui", false, "run one headless command instead of the default graphical client")
+	guiListen := flag.String("gui-listen", "127.0.0.1:8080", "GUI HTTP listen address")
+	timeout := flag.Duration("timeout", 2*time.Minute, "HTTP request timeout and total server discovery limit")
 	flag.Parse()
+	brightnessSelected := false
+	flag.Visit(func(item *flag.Flag) {
+		if item.Name == "brightness" {
+			brightnessSelected = true
+		}
+	})
 
 	selectedActions := 0
+	if brightnessSelected {
+		selectedActions++
+	}
+	if *scan {
+		selectedActions++
+	}
 	if *imagePath != "" {
 		selectedActions++
 	}
@@ -75,15 +94,18 @@ func main() {
 	if *playAnimation != "" {
 		selectedActions++
 	}
-	if *gui {
-		selectedActions++
+	if *noGUI && selectedActions != 1 {
+		log.Fatal("provide exactly one of -scan, -brightness, -image, -color, -show-info, -clock, -marquee, -list-marquee-fonts, -gif, or -play-animation with -no-gui")
 	}
-	if selectedActions != 1 {
-		log.Fatal("provide exactly one of -image, -color, -show-info, -clock, -marquee, -list-marquee-fonts, -gif, -play-animation, or -gui")
+	if !*noGUI && selectedActions != 0 {
+		log.Fatal("CLI actions require -no-gui; provide exactly one headless command or start the GUI without an action")
 	}
 	flag.Visit(func(item *flag.Flag) {
 		if strings.HasPrefix(item.Name, "marquee-") && *marqueeText == "" {
 			log.Fatalf("-%s requires -marquee", item.Name)
+		}
+		if strings.HasPrefix(item.Name, "scan-") && *noGUI && !*scan && (*serverURL != "" || *listMarqueeFonts) {
+			log.Fatalf("-%s requires -scan", item.Name)
 		}
 	})
 	if *showClock == "" && (*clockColor1 != "" || *clockColor2 != "") {
@@ -98,6 +120,36 @@ func main() {
 	if *gifPath == "" && (*animationName != "" || *animationLoops != -1) {
 		log.Fatal("-animation-name and -animation-loops require -gif")
 	}
+	if brightnessSelected && (*brightness < 1 || *brightness > 100) {
+		log.Fatal("brightness must be between 1 and 100")
+	}
+	scanOptions := client.ScanOptions{Port: *scanPort, ProbeTimeout: *scanTimeout}
+	if !*noGUI || *scan || (*serverURL == "" && !*listMarqueeFonts) {
+		if *timeout <= 0 || *scanTimeout <= 0 {
+			log.Fatal("-timeout and -scan-timeout must be positive when scanning")
+		}
+		if *scanPort < 1 || *scanPort > 65535 {
+			log.Fatal("-scan-port must be between 1 and 65535")
+		}
+		if *scanNetwork != "" {
+			prefix, err := netip.ParsePrefix(*scanNetwork)
+			if err != nil || !prefix.Addr().Is4() {
+				log.Fatal("-scan-network must be an IPv4 CIDR prefix, for example 192.168.0.0/24")
+			}
+			scanOptions.Networks = []netip.Prefix{prefix}
+		}
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if *scan {
+		ctx, cancel := context.WithTimeout(ctx, *timeout)
+		defer cancel()
+		fmt.Fprintf(os.Stderr, "scanning IPv4 networks on HTTP port %d...\n", *scanPort)
+		if err := scanServers(ctx, os.Stdout, scanOptions); err != nil {
+			log.Fatalf("scan incomplete: %v", err)
+		}
+		return
+	}
 	if *listMarqueeFonts {
 		fonts, err := marquee.Fonts()
 		if err != nil {
@@ -108,22 +160,41 @@ func main() {
 		}
 		return
 	}
-	api, err := client.New(*serverURL, *timeout)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if *gui {
-		handler, err := clientgui.New(api)
+	if !*noGUI {
+		handler, err := clientgui.NewWithDiscovery(ctx, clientgui.DiscoveryOptions{
+			ServerURL: *serverURL, Timeout: *timeout, ScanOptions: scanOptions,
+		})
 		if err != nil {
 			log.Fatal(err)
 		}
-		fmt.Printf("graphical client available at http://%s\n", *guiListen)
-		if err := http.ListenAndServe(*guiListen, handler); err != nil {
+		if err := serveGUI(ctx, *guiListen, handler, os.Stdout); err != nil {
 			log.Fatalf("serve graphical client: %v", err)
 		}
 		return
 	}
-	ctx := context.Background()
+	if *serverURL == "" {
+		fmt.Fprintf(os.Stderr, "discovering servers on HTTP port %d...\n", *scanPort)
+		scanCtx, cancel := context.WithTimeout(ctx, *timeout)
+		results, scanErr := client.Scan(scanCtx, scanOptions)
+		cancel()
+		var err error
+		*serverURL, err = serverFromScan(results, scanErr)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	api, err := client.New(*serverURL, *timeout)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if brightnessSelected {
+		state, err := api.SetBrightness(ctx, *brightness)
+		if err != nil {
+			log.Fatalf("set brightness: %v", err)
+		}
+		fmt.Printf("brightness set to %d%%\n", state.Brightness)
+		return
+	}
 	if *marqueeText != "" {
 		cycle, err := marquee.ParseCycle(*marqueeCycle)
 		if err != nil {

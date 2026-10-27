@@ -15,7 +15,7 @@ fi
 target=$1
 config_path=${2:-config.toml}
 ssh_port=${RPI_SSH_PORT:-22}
-health_url=${RPI_HEALTH_URL-http://127.0.0.1:8080/healthz}
+health_url=${RPI_HEALTH_URL-http://127.0.0.1:7272/healthz}
 remote_path=${RPI_REMOTE_PATH:-/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin}
 
 case "$target" in

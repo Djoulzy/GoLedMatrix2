@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/draw"
@@ -39,6 +40,38 @@ func TestIndexAndServerInfo(t *testing.T) {
 	handler.ServeHTTP(info, httptest.NewRequest(http.MethodGet, "/api/info", nil))
 	if info.Code != http.StatusOK || !bytes.Contains(info.Body.Bytes(), []byte(`"width":2`)) {
 		t.Fatalf("info response = %d %q", info.Code, info.Body.String())
+	}
+}
+
+func TestBrightnessControl(t *testing.T) {
+	matrix := &fakeMatrixClient{info: testInfo()}
+	handler := newHandler(matrix)
+	for _, tc := range []struct {
+		body   string
+		status int
+	}{
+		{`{"brightness":35}`, http.StatusOK},
+		{`{"brightness":0}`, http.StatusBadRequest},
+		{`{"brightness":101}`, http.StatusBadRequest},
+		{`{"brightness":35.5}`, http.StatusBadRequest},
+		{`{"brightness":"35"}`, http.StatusBadRequest},
+		{`{}`, http.StatusBadRequest},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "/api/brightness", bytes.NewBufferString(tc.body))
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != tc.status || matrix.info.Brightness != 35 {
+			t.Fatalf("brightness request %s: %d %s, applied=%d", tc.body, response.Code, response.Body, matrix.info.Brightness)
+		}
+	}
+	matrix.brightnessError = errors.New("server unavailable")
+	request := httptest.NewRequest(http.MethodPost, "/api/brightness", bytes.NewBufferString(`{"brightness":80}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadGateway || matrix.info.Brightness != 35 {
+		t.Fatalf("brightness failure hidden: %d %s", response.Code, response.Body)
 	}
 }
 
@@ -296,8 +329,9 @@ func testInfo() server.Info {
 }
 
 type fakeMatrixClient struct {
-	info server.Info
-	sent frame.Frame
+	info            server.Info
+	brightnessError error
+	sent            frame.Frame
 
 	clockMode     string
 	clockColor1   string
@@ -310,6 +344,14 @@ type fakeMatrixClient struct {
 	uploadName string
 	upload     animation.Bundle
 	playName   string
+}
+
+func (f *fakeMatrixClient) SetBrightness(_ context.Context, value int) (server.BrightnessState, error) {
+	if f.brightnessError != nil {
+		return server.BrightnessState{}, f.brightnessError
+	}
+	f.info.Brightness = value
+	return server.BrightnessState{Brightness: value}, nil
 }
 
 func (f *fakeMatrixClient) Info(context.Context) (server.Info, error) {

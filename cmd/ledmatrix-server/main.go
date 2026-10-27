@@ -55,7 +55,7 @@ func parseFlags() (options, error) {
 	checkConfig := flag.Bool("check-config", false, "validate configuration and exit")
 	backend := flag.String("backend", "memory", "display backend: memory, simulation, or rpi")
 	simulationPixelPitch := flag.Int("simulation-pixel-pitch", 6, "simulated LED size in screen pixels (minimum 2)")
-	listen := flag.String("listen", "", "override HTTP listen address (for example :8080)")
+	listen := flag.String("listen", "", "override HTTP listen address (for example :7272)")
 
 	rows := flag.Int("rows", defaults.Hardware.Rows, "rows per physical panel")
 	cols := flag.Int("cols", defaults.Hardware.Cols, "columns per physical panel")
@@ -229,6 +229,9 @@ func serveDisplay(cfg options, target display.Display, backendName string, exter
 	}
 
 	width, height := target.Geometry()
+	if err := target.SetBrightness(ctx, cfg.config.Hardware.Brightness); err != nil {
+		return false, fmt.Errorf("initialize brightness: %w", err)
+	}
 	renderer := render.New(target)
 	clockController, err := startClock(
 		ctx,

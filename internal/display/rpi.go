@@ -29,13 +29,15 @@ import (
 )
 
 type RPI struct {
-	mu        sync.Mutex
-	matrix    *C.struct_RGBLedMatrix
-	back      *C.struct_LedCanvas
-	width     int
-	height    int
-	frameSize int
-	strings   [3]*C.char
+	mu         sync.Mutex
+	matrix     *C.struct_RGBLedMatrix
+	back       *C.struct_LedCanvas
+	width      int
+	height     int
+	frameSize  int
+	strings    [3]*C.char
+	brightness int
+	latest     frame.Frame
 }
 
 func NewRPI(config RPIConfig) (Display, error) {
@@ -91,7 +93,7 @@ func NewRPI(config RPIConfig) (Display, error) {
 	// The native options may retain their string pointers for the matrix's
 	// lifetime. Release them only after deleting the matrix.
 	initialized = true
-	return &RPI{matrix: matrix, back: back, width: int(width), height: int(height), frameSize: frameSize, strings: strings}, nil
+	return &RPI{matrix: matrix, back: back, width: int(width), height: int(height), frameSize: frameSize, strings: strings, brightness: int(C.led_matrix_get_brightness(matrix))}, nil
 }
 
 func (d *RPI) Geometry() (int, int) { return d.width, d.height }
@@ -116,6 +118,41 @@ func (d *RPI) Present(ctx context.Context, next frame.Frame) error {
 	d.back = C.present_rgb24(d.matrix, d.back,
 		(*C.uint8_t)(unsafe.Pointer(&next.Pixels[0])), C.size_t(len(next.Pixels)),
 		C.int(d.width), C.int(d.height))
+	d.latest = next
+	return nil
+}
+
+func (d *RPI) Brightness() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.brightness
+}
+
+func (d *RPI) SetBrightness(ctx context.Context, value int) error {
+	if err := ValidateBrightness(value); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if d.matrix == nil {
+		return fmt.Errorf("RGB matrix is closed")
+	}
+	if d.brightness == value {
+		return nil
+	}
+	C.led_matrix_set_brightness(d.matrix, C.uint8_t(value))
+	// Brightness affects the native RGB-to-PWM conversion, not pixels already
+	// encoded in a canvas. Redraw the visible frame once, into the back buffer,
+	// so even a static image changes immediately without touching the front.
+	if len(d.latest.Pixels) != 0 {
+		d.back = C.present_rgb24(d.matrix, d.back,
+			(*C.uint8_t)(unsafe.Pointer(&d.latest.Pixels[0])), C.size_t(len(d.latest.Pixels)),
+			C.int(d.width), C.int(d.height))
+	}
+	d.brightness = value
 	return nil
 }
 
@@ -125,6 +162,7 @@ func (d *RPI) Close() error {
 	if d.matrix != nil {
 		C.led_matrix_delete(d.matrix)
 		d.matrix, d.back = nil, nil
+		d.latest = frame.Frame{}
 		for i, value := range d.strings {
 			C.free(unsafe.Pointer(value))
 			d.strings[i] = nil

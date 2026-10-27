@@ -27,7 +27,7 @@ DoGpioInit              = true
 
 [HTTPserver]
 Addr                    = "detect"
-Port                    = 8080
+# Port                    = 7272
 Enabled                 = true
 
 [Clock]
