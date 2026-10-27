@@ -28,9 +28,10 @@ type Simulator struct {
 	width  int
 	height int
 
-	mu     sync.RWMutex
-	pixels []byte
-	closed atomic.Bool
+	mu         sync.RWMutex
+	pixels     []byte
+	brightness int
+	closed     atomic.Bool
 }
 
 // RunSimulator must be called directly from main.main. In particular it must
@@ -64,7 +65,7 @@ func RunSimulator(
 
 		byteLen, _ := frame.ByteLen(width, height)
 		simulator := &Simulator{
-			window: window, width: width, height: height, pixels: make([]byte, byteLen),
+			window: window, width: width, height: height, pixels: make([]byte, byteLen), brightness: 100,
 		}
 		windowClosed := make(chan struct{})
 		var closeOnce sync.Once
@@ -146,10 +147,34 @@ func (s *Simulator) Present(_ context.Context, next frame.Frame) error {
 // itself is released by RunSimulator on its owning UI thread.
 func (s *Simulator) Close() error { return nil }
 
+func (s *Simulator) Brightness() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.brightness
+}
+
+func (s *Simulator) SetBrightness(ctx context.Context, value int) error {
+	if err := ValidateBrightness(value); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.closed.Load() {
+		return fmt.Errorf("simulation window is closed")
+	}
+	s.mu.Lock()
+	s.brightness = value
+	s.mu.Unlock()
+	s.window.Send(paint.Event{})
+	return nil
+}
+
 func (s *Simulator) paint(view image.Point) {
 	pixels := make([]byte, len(s.pixels))
 	s.mu.RLock()
 	copy(pixels, s.pixels)
+	brightness := s.brightness
 	s.mu.RUnlock()
 
 	pitch, gutter, margin := simulationLayout(view, s.width, s.height)
@@ -160,7 +185,7 @@ func (s *Simulator) paint(view image.Point) {
 			top := margin + y*(pitch+gutter)
 			s.window.Fill(
 				image.Rect(left, top, left+pitch, top+pitch),
-				color.RGBA{R: pixels[offset], G: pixels[offset+1], B: pixels[offset+2], A: 0xff},
+				color.RGBA{R: dimPixel(pixels[offset], brightness), G: dimPixel(pixels[offset+1], brightness), B: dimPixel(pixels[offset+2], brightness), A: 0xff},
 				screen.Src,
 			)
 		}

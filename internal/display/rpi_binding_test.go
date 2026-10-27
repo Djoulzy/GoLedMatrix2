@@ -92,6 +92,57 @@ func TestRPIBindingRejectsInvalidFramesAndClosesOnce(t *testing.T) {
 	}
 }
 
+func TestRPIBindingBrightnessRedrawsStaticFrameAtVSync(t *testing.T) {
+	resetRPIStub(0)
+	target, err := NewRPI(rpiTestConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	if target.Brightness() != 75 {
+		t.Fatalf("initial brightness = %d", target.Brightness())
+	}
+	pixels := bytes.Repeat([]byte{200, 100, 50}, 6)
+	if err := target.Present(context.Background(), frame.Frame{Width: 3, Height: 2, Pixels: pixels}); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []int{25, 25, 100, 1} {
+		if err := target.SetBrightness(context.Background(), value); err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := rpiStubBrightness(); got != value || target.Brightness() != value {
+			t.Fatalf("native brightness = %d, reported = %d, want %d", got, target.Brightness(), value)
+		}
+		if !bytes.Equal(rpiStubPixels(), pixels) {
+			t.Fatal("brightness redraw did not preserve the original RGB24 frame")
+		}
+	}
+	if _, changes := rpiStubBrightness(); changes != 3 {
+		t.Fatalf("native brightness changes = %d, want 3", changes)
+	}
+	_, _, swaps, writes, activeWrites, invalidImages := rpiStubCounts()
+	if swaps != 4 || writes != 4 || activeWrites != 0 || invalidImages != 0 {
+		t.Fatalf("brightness redraw: swaps=%d writes=%d activeWrites=%d invalid=%d", swaps, writes, activeWrites, invalidImages)
+	}
+	for _, invalid := range []int{0, -1, 101, 256} {
+		if err := target.SetBrightness(context.Background(), invalid); err == nil {
+			t.Fatalf("invalid brightness accepted: %d", invalid)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := target.SetBrightness(ctx, 50); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled brightness = %v", err)
+	}
+	_ = target.Close()
+	if err := target.SetBrightness(context.Background(), 50); err == nil {
+		t.Fatal("brightness change after close succeeded")
+	}
+	if _, changes := rpiStubBrightness(); changes != 3 {
+		t.Fatal("rejected brightness request reached native driver")
+	}
+}
+
 func TestRPIBindingInitializationFailures(t *testing.T) {
 	for failure := 1; failure <= 3; failure++ {
 		resetRPIStub(failure)
@@ -118,6 +169,7 @@ func TestRPIBindingConcurrentCloseAndPresent(t *testing.T) {
 			defer workers.Done()
 			for j := 0; j < 20; j++ {
 				_ = target.Present(context.Background(), frame.Frame{Width: 3, Height: 2, Pixels: make([]byte, 18)})
+				_ = target.SetBrightness(context.Background(), 1+j)
 			}
 		}()
 	}

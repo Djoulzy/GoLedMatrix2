@@ -76,7 +76,7 @@ func Default() Config {
 		Runtime: RuntimeOptions{
 			GPIOSlowdown: 1, Daemon: 0, DropPrivileges: -1, DoGPIOInit: true,
 		},
-		HTTP:      HTTPServer{Addr: "detect", Port: 8080, Enabled: true, InfoDisplaySeconds: 5},
+		HTTP:      HTTPServer{Addr: "detect", Port: 7272, Enabled: true, InfoDisplaySeconds: 5},
 		Clock:     ClockConfig{DefaultMode: string(matrixclock.Simple)},
 		Animation: AnimationConfig{Directory: "animations", MaxUploadMB: 128},
 	}

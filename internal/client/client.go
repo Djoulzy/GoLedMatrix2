@@ -58,6 +58,37 @@ func (c *Client) Info(ctx context.Context) (server.Info, error) {
 	return info, nil
 }
 
+func (c *Client) SetBrightness(ctx context.Context, value int) (server.BrightnessState, error) {
+	var state server.BrightnessState
+	if value < 1 || value > 100 {
+		return state, fmt.Errorf("brightness must be between 1 and 100")
+	}
+	body, err := json.Marshal(server.BrightnessState{Brightness: value})
+	if err != nil {
+		return state, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.endpoint("/v1/brightness"), bytes.NewReader(body))
+	if err != nil {
+		return state, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return state, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return state, responseError(resp)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+		return state, fmt.Errorf("decode brightness response: %w", err)
+	}
+	if state.Brightness < 1 || state.Brightness > 100 {
+		return state, fmt.Errorf("invalid brightness response")
+	}
+	return state, nil
+}
+
 func (c *Client) Send(ctx context.Context, next frame.Frame) (uint64, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.endpoint("/v1/frame"), bytes.NewReader(next.Pixels))
 	if err != nil {

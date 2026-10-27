@@ -3,6 +3,10 @@ const $ = (selector) => document.querySelector(selector);
 const state = {
   busy: 0,
   geometry: null,
+  brightness: null,
+  brightnessDirty: false,
+  brightnessSaving: false,
+  brightnessRevision: 0,
 };
 
 function setActivity(message) {
@@ -61,6 +65,7 @@ function displayTemperatures(system, offline = false) {
 }
 
 async function refreshInfo(silent = false) {
+  const brightnessRevision = state.brightnessRevision;
   try {
     const info = await request("/api/info");
     state.geometry = {width: info.width, height: info.height};
@@ -71,6 +76,9 @@ async function refreshInfo(silent = false) {
     $("#format").textContent = info.pixel_format;
     $("#uptime").textContent = humanDuration(info.uptime_seconds);
     displayTemperatures(info.system);
+    if (brightnessRevision === state.brightnessRevision && !state.brightnessSaving) {
+      displayBrightness(info.brightness);
+    }
     const accepted = info.stats?.accepted || 0;
     const rendered = info.stats?.rendered || 0;
     $("#stats").textContent = `${rendered} / ${accepted} trames rendues`;
@@ -79,9 +87,55 @@ async function refreshInfo(silent = false) {
     $("#connection").className = "connection offline";
     $("#connection-label").textContent = "Serveur hors ligne";
     displayTemperatures(null, true);
+    if (brightnessRevision === state.brightnessRevision && !state.brightnessSaving) {
+      displayBrightness(null, true);
+    }
     if (!silent) toast(error.message, true);
   }
 }
+
+function displayBrightness(value, offline = false) {
+  const supported = Number.isInteger(value) && value >= 1 && value <= 100;
+  state.brightness = supported ? value : null;
+  $("#brightness").disabled = !supported || state.brightnessSaving;
+  $("#brightness-form button").disabled = !supported || state.brightnessSaving;
+  $("#brightness-status").textContent = offline
+    ? "Indisponible — serveur hors ligne"
+    : supported ? `Luminosité actuelle : ${value} %` : "Réglage indisponible — mettez à jour le serveur";
+  if (supported && !state.brightnessDirty && !state.brightnessSaving) {
+    $("#brightness").value = value;
+    $("#brightness-value").textContent = `${value} %`;
+  }
+}
+
+$("#brightness").addEventListener("input", (event) => {
+  state.brightnessDirty = true;
+  $("#brightness-value").textContent = `${event.target.value} %`;
+});
+
+$("#brightness-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (state.brightnessSaving || state.brightness === null) return;
+  const value = Number($("#brightness").value);
+  state.brightnessSaving = true;
+  state.brightnessRevision++;
+  displayBrightness(state.brightness);
+  try {
+    setActivity("Réglage de la luminosité…");
+    const result = await request("/api/brightness", jsonOptions({brightness: value}));
+    state.brightness = result.brightness;
+    state.brightnessDirty = false;
+    setActivity(`Luminosité réglée à ${result.brightness} %.`);
+    toast("Luminosité appliquée");
+  } catch (error) {
+    setActivity("Le réglage de la luminosité a échoué.");
+    toast(error.message, true);
+  } finally {
+    state.brightnessSaving = false;
+    state.brightnessRevision++;
+    displayBrightness(state.brightness);
+  }
+});
 
 function jsonOptions(body) {
   return {

@@ -25,9 +25,18 @@ type temporarySubmission struct {
 	duration time.Duration
 }
 
+type brightnessRequest struct {
+	ctx    context.Context
+	value  int
+	result chan error
+}
+
 type Renderer struct {
-	display display.Display
-	notify  chan struct{}
+	display            display.Display
+	notify             chan struct{}
+	brightnessRequests chan brightnessRequest
+	done               chan struct{}
+	brightness         atomic.Int64
 
 	mu            sync.Mutex
 	pending       *submission
@@ -48,9 +57,41 @@ type Stats struct {
 }
 
 func New(target display.Display) *Renderer {
-	return &Renderer{
+	renderer := &Renderer{
 		display: target, notify: make(chan struct{}, 1),
+		brightnessRequests: make(chan brightnessRequest), done: make(chan struct{}),
 		defaultActive: true,
+	}
+	renderer.brightness.Store(int64(target.Brightness()))
+	return renderer
+}
+
+func (r *Renderer) Brightness() int { return int(r.brightness.Load()) }
+
+// SetBrightness waits for the render goroutine to apply the setting. Native
+// driver access stays serialized with frame presentation, including animations.
+func (r *Renderer) SetBrightness(ctx context.Context, value int) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := display.ValidateBrightness(value); err != nil {
+		return err
+	}
+	request := brightnessRequest{ctx: ctx, value: value, result: make(chan error, 1)}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.done:
+		return fmt.Errorf("renderer is stopped")
+	case r.brightnessRequests <- request:
+	}
+	select {
+	case err := <-request.result:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.done:
+		return fmt.Errorf("renderer is stopped")
 	}
 }
 
@@ -146,8 +187,9 @@ func (r *Renderer) Stats() Stats {
 }
 
 // Run blocks until ctx is cancelled. The native matrix driver keeps the last
-// rendered buffer scanning continuously; Run only acts when a new frame arrives.
+// rendered buffer scanning continuously; Run acts on new frames and settings.
 func (r *Renderer) Run(ctx context.Context) {
+	defer close(r.done)
 	var temporaryTimer *time.Timer
 	var temporaryDone <-chan time.Time
 	showingTemporary := false
@@ -161,6 +203,12 @@ func (r *Renderer) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case request := <-r.brightnessRequests:
+			err := r.display.SetBrightness(request.ctx, request.value)
+			if err == nil {
+				r.brightness.Store(int64(request.value))
+			}
+			request.result <- err
 		case <-r.notify:
 			if temporary := r.takeTemporary(); temporary != nil {
 				if err := r.present(ctx, temporary.frame, 0, "technical information"); err == nil {
@@ -191,11 +239,9 @@ func (r *Renderer) Run(ctx context.Context) {
 }
 
 func (r *Renderer) presentCurrent(ctx context.Context) {
-	for {
-		next := r.takePending()
-		if next == nil {
-			break
-		}
+	// Handle one pending frame per wakeup so a saturated producer cannot starve
+	// brightness commands or shutdown. Submissions already schedule a wakeup.
+	if next := r.takePending(); next != nil {
 		if err := r.present(ctx, next.frame, next.sequence, "frame"); err == nil && next.counted {
 			r.rendered.Store(next.sequence)
 		}

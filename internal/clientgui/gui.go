@@ -27,6 +27,7 @@ var staticFiles embed.FS
 
 type matrixClient interface {
 	Info(context.Context) (server.Info, error)
+	SetBrightness(context.Context, int) (server.BrightnessState, error)
 	Send(context.Context, frame.Frame) (uint64, error)
 	DisplayInfo(context.Context) error
 	DisplayClock(context.Context, string, string, string) error
@@ -52,6 +53,7 @@ func newHandler(api matrixClient) http.Handler {
 	mux.HandleFunc("GET /", serveIndex)
 	mux.Handle("GET /static/", http.FileServer(http.FS(staticFiles)))
 	mux.HandleFunc("GET /api/info", gui.info)
+	mux.HandleFunc("POST /api/brightness", gui.brightness)
 	mux.HandleFunc("POST /api/color", gui.color)
 	mux.HandleFunc("POST /api/image", gui.image)
 	mux.HandleFunc("POST /api/clock", gui.clock)
@@ -84,6 +86,24 @@ func (g *GUI) info(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, info)
+}
+
+func (g *GUI) brightness(w http.ResponseWriter, r *http.Request) {
+	var request server.BrightnessState
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, "Luminosité invalide", err)
+		return
+	}
+	if request.Brightness < 1 || request.Brightness > 100 {
+		writeError(w, http.StatusBadRequest, "Luminosité invalide", errors.New("utiliser un entier de 1 à 100"))
+		return
+	}
+	state, err := g.client.SetBrightness(r.Context(), request.Brightness)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "Réglage de la luminosité impossible", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, state)
 }
 
 func (g *GUI) color(w http.ResponseWriter, r *http.Request) {

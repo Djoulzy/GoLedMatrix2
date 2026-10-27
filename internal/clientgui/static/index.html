@@ -46,6 +46,21 @@
       <p id="temperature-status" role="status">Indisponible</p>
     </section>
 
+    <section class="brightness-card" aria-labelledby="brightness-heading">
+      <h2 id="brightness-heading">Luminosité</h2>
+      <p>Ajustez l’intensité de l’affichage, de 1 à 100 %.</p>
+      <form id="brightness-form">
+        <label for="brightness">Intensité lumineuse
+          <output id="brightness-value" for="brightness">—</output>
+        </label>
+        <div class="brightness-controls">
+          <input id="brightness" name="brightness" type="range" min="1" max="100" step="1" value="100" disabled>
+          <button type="submit" disabled>Appliquer</button>
+        </div>
+        <p id="brightness-status" class="form-hint" role="status">Connexion au serveur…</p>
+      </form>
+    </section>
+
     <main>
       <section class="panel clock-panel">
         <div class="panel-heading">

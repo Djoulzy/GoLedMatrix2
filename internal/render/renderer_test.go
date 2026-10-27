@@ -156,6 +156,9 @@ func (d *recordingDisplay) Present(_ context.Context, next frame.Frame) error {
 
 func (d *recordingDisplay) Close() error { return nil }
 
+func (d *recordingDisplay) Brightness() int                          { return 100 }
+func (d *recordingDisplay) SetBrightness(context.Context, int) error { return nil }
+
 type blockingDisplay struct {
 	started chan struct{}
 	release chan struct{}
@@ -182,3 +185,6 @@ func (d *blockingDisplay) Present(_ context.Context, next frame.Frame) error {
 }
 
 func (d *blockingDisplay) Close() error { return nil }
+
+func (d *blockingDisplay) Brightness() int                          { return 100 }
+func (d *blockingDisplay) SetBrightness(context.Context, int) error { return nil }

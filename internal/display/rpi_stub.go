@@ -20,6 +20,8 @@ struct RGBLedMatrix {
 static int stub_fail;
 int stub_created, stub_deleted, stub_swaps, stub_writes;
 int stub_active_writes, stub_invalid_images;
+uint8_t stub_brightness;
+int stub_brightness_changes;
 static struct RGBLedMatrix *stub_matrix;
 struct RGBLedMatrixOptions stub_options;
 struct RGBLedRuntimeOptions stub_runtime;
@@ -36,6 +38,7 @@ struct RGBLedMatrix *led_matrix_create_from_options_and_rt_options(
   struct RGBLedMatrixOptions *options, struct RGBLedRuntimeOptions *runtime) {
   if (stub_fail == 1) return NULL;
   stub_options = *options; stub_runtime = *runtime;
+  stub_brightness = options->brightness;
   snprintf(stub_mapping, sizeof(stub_mapping), "%s", options->hardware_mapping);
   snprintf(stub_mapper, sizeof(stub_mapper), "%s", options->pixel_mapper_config);
   snprintf(stub_sequence, sizeof(stub_sequence), "%s", options->led_rgb_sequence);
@@ -85,16 +88,27 @@ void led_matrix_delete(struct RGBLedMatrix *m) {
   ++stub_deleted;
 }
 
+uint8_t led_matrix_get_brightness(struct RGBLedMatrix *m) { return stub_brightness; }
+void led_matrix_set_brightness(struct RGBLedMatrix *m, uint8_t value) {
+  stub_brightness = value;
+  ++stub_brightness_changes;
+}
+
 static void stub_reset(int failure) {
   stub_fail = failure;
   stub_created = stub_deleted = stub_swaps = stub_writes = 0;
   stub_active_writes = stub_invalid_images = 0;
+  stub_brightness_changes = 0;
 }
 static int stub_pixel(int offset) { return stub_matrix->front->pixels[offset]; }
 */
 import "C"
 
 func resetRPIStub(failure int) { C.stub_reset(C.int(failure)) }
+
+func rpiStubBrightness() (int, int) {
+	return int(C.stub_brightness), int(C.stub_brightness_changes)
+}
 
 func rpiStubCounts() (created, deleted, swaps, writes, activeWrites, invalidImages int) {
 	return int(C.stub_created), int(C.stub_deleted), int(C.stub_swaps), int(C.stub_writes), int(C.stub_active_writes), int(C.stub_invalid_images)

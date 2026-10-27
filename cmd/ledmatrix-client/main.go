@@ -10,7 +10,9 @@ import (
 	_ "image/png"
 	"log"
 	"net/http"
+	"net/netip"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,7 +25,12 @@ import (
 )
 
 func main() {
-	serverURL := flag.String("server", "http://localhost:8080", "matrix server URL")
+	serverURL := flag.String("server", "http://localhost:7272", "matrix server URL")
+	scan := flag.Bool("scan", false, "list GoLedMatrix2 servers on local IPv4 networks and exit")
+	scanPort := flag.Int("scan-port", client.DefaultScanPort, "HTTP port to probe with -scan")
+	scanNetwork := flag.String("scan-network", "", "IPv4 CIDR subnet to scan instead of automatic interface detection")
+	scanTimeout := flag.Duration("scan-timeout", client.DefaultScanTimeout, "timeout for each server probe with -scan")
+	brightness := flag.Int("brightness", 0, "set display brightness (1-100 percent)")
 	imagePath := flag.String("image", "", "PNG or JPEG image with the matrix dimensions")
 	solid := flag.String("color", "", "solid color in #RRGGBB form")
 	showInfo := flag.Bool("show-info", false, "temporarily display server connection information")
@@ -47,10 +54,22 @@ func main() {
 	animationLoops := flag.Int("animation-loops", -1, "total loops: 0 infinite, -1 uses the GIF value")
 	gui := flag.Bool("gui", false, "start the browser-based graphical client")
 	guiListen := flag.String("gui-listen", "127.0.0.1:8090", "GUI HTTP listen address")
-	timeout := flag.Duration("timeout", 2*time.Minute, "HTTP request timeout")
+	timeout := flag.Duration("timeout", 2*time.Minute, "HTTP request timeout, or total duration limit with -scan")
 	flag.Parse()
+	brightnessSelected := false
+	flag.Visit(func(item *flag.Flag) {
+		if item.Name == "brightness" {
+			brightnessSelected = true
+		}
+	})
 
 	selectedActions := 0
+	if brightnessSelected {
+		selectedActions++
+	}
+	if *scan {
+		selectedActions++
+	}
 	if *imagePath != "" {
 		selectedActions++
 	}
@@ -79,11 +98,14 @@ func main() {
 		selectedActions++
 	}
 	if selectedActions != 1 {
-		log.Fatal("provide exactly one of -image, -color, -show-info, -clock, -marquee, -list-marquee-fonts, -gif, -play-animation, or -gui")
+		log.Fatal("provide exactly one of -scan, -brightness, -image, -color, -show-info, -clock, -marquee, -list-marquee-fonts, -gif, -play-animation, or -gui")
 	}
 	flag.Visit(func(item *flag.Flag) {
 		if strings.HasPrefix(item.Name, "marquee-") && *marqueeText == "" {
 			log.Fatalf("-%s requires -marquee", item.Name)
+		}
+		if strings.HasPrefix(item.Name, "scan-") && !*scan {
+			log.Fatalf("-%s requires -scan", item.Name)
 		}
 	})
 	if *showClock == "" && (*clockColor1 != "" || *clockColor2 != "") {
@@ -97,6 +119,31 @@ func main() {
 	}
 	if *gifPath == "" && (*animationName != "" || *animationLoops != -1) {
 		log.Fatal("-animation-name and -animation-loops require -gif")
+	}
+	if *scan {
+		if *timeout <= 0 || *scanTimeout <= 0 {
+			log.Fatal("-timeout and -scan-timeout must be positive when scanning")
+		}
+		if *scanPort < 1 || *scanPort > 65535 {
+			log.Fatal("-scan-port must be between 1 and 65535")
+		}
+		options := client.ScanOptions{Port: *scanPort, ProbeTimeout: *scanTimeout}
+		if *scanNetwork != "" {
+			prefix, err := netip.ParsePrefix(*scanNetwork)
+			if err != nil || !prefix.Addr().Is4() {
+				log.Fatal("-scan-network must be an IPv4 CIDR prefix, for example 192.168.0.0/24")
+			}
+			options.Networks = []netip.Prefix{prefix}
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		defer stop()
+		ctx, cancel := context.WithTimeout(ctx, *timeout)
+		defer cancel()
+		fmt.Fprintf(os.Stderr, "scanning IPv4 networks on HTTP port %d...\n", *scanPort)
+		if err := scanServers(ctx, os.Stdout, options); err != nil {
+			log.Fatalf("scan incomplete: %v", err)
+		}
+		return
 	}
 	if *listMarqueeFonts {
 		fonts, err := marquee.Fonts()
@@ -124,6 +171,14 @@ func main() {
 		return
 	}
 	ctx := context.Background()
+	if brightnessSelected {
+		state, err := api.SetBrightness(ctx, *brightness)
+		if err != nil {
+			log.Fatalf("set brightness: %v", err)
+		}
+		fmt.Printf("brightness set to %d%%\n", state.Brightness)
+		return
+	}
 	if *marqueeText != "" {
 		cycle, err := marquee.ParseCycle(*marqueeCycle)
 		if err != nil {

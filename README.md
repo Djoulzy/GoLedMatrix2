@@ -15,6 +15,8 @@ Fondations disponibles :
 
 - serveur HTTP versionné, client en ligne de commande et panneau de contrôle
   web local ;
+- découverte des serveurs du réseau local avec l'option client `-scan` ;
+- réglage de luminosité à chaud depuis l'API, la CLI et l'interface web ;
 - protocole RGB24 brut, sans décodage ni composition sur le Raspberry Pi ;
 - file à une seule trame logique : si plusieurs images arrivent pendant un
   rendu, seule la plus récente est conservée ;
@@ -77,7 +79,8 @@ Décrit le contrat attendu par le serveur :
   "pixel_format": "rgb24",
   "frame_bytes": 6144,
   "backend": "memory",
-  "base_urls": ["http://192.168.0.18:8080"],
+  "brightness": 100,
+  "base_urls": ["http://192.168.0.18:7272"],
   "started_at": "2026-07-28T10:00:00Z",
   "uptime_seconds": 42,
   "stats": {"accepted": 0, "rendered": 0, "failed": 0},
@@ -112,6 +115,37 @@ liste est vide si aucun n'est accessible, sans bloquer le serveur ni conserver
 d'anciennes températures. Hors Linux, la liste est vide et `sampled_at` absent.
 Aucune bibliothèque supplémentaire ni commande externe n'est nécessaire.
 
+### `PUT /v1/brightness`
+
+Règle immédiatement la luminosité globale de l'affichage, de **1 à 100 %**, sans
+redémarrer le serveur. Le corps utilise `Content-Type: application/json` :
+
+```json
+{"brightness": 35}
+```
+
+La réponse est `200 OK` avec `{"brightness":35}` lorsque le pilote a appliqué
+le réglage. La valeur courante est aussi exposée par `GET /v1/info`.
+Une valeur absente, non entière ou hors limites est rejetée sans modifier la
+luminosité. Le réglage conserve le mode actif : image fixe, horloge, texte
+défilant, animation ou écran technique temporaire.
+
+Sur Raspberry Pi, le réglage utilise la fonction native de
+`rpi-rgb-led-matrix`. L'image visible est recopiée une seule fois dans le buffer
+hors écran puis échangée au VSync pour appliquer aussi la nouvelle luminosité
+aux images fixes. L'accès au pilote reste sérialisé avec les autres rendus,
+sans boucle de rafraîchissement Go supplémentaire. Le simulateur et le backend
+mémoire modulent les composantes RGB en conservant la trame d'origine.
+
+```bash
+./bin/ledmatrix-client -server http://192.168.0.18:7272 -brightness 35
+```
+
+Le réglage est conservé jusqu'à la prochaine modification ou à l'arrêt du
+serveur. Au redémarrage, `HardwareConfig.Brightness` (ou l'option serveur
+`-brightness`) fournit la valeur initiale ; le fichier TOML n'est pas modifié
+par l'API.
+
 ### `PUT /v1/frame`
 
 - `Content-Type: application/vnd.goledmatrix.rgb24`
@@ -136,7 +170,7 @@ Commande équivalente avec le client :
 
 ```bash
 go run ./cmd/ledmatrix-client \
-  -server http://192.168.0.18:8080 \
+  -server http://192.168.0.18:7272 \
   -show-info
 ```
 
@@ -160,7 +194,7 @@ Commande équivalente avec le client :
 
 ```bash
 go run ./cmd/ledmatrix-client \
-  -server http://192.168.0.18:8080 \
+  -server http://192.168.0.18:7272 \
   -clock round \
   -clock-color1 '#ff0000' \
   -clock-color2 '#ffffff'
@@ -213,16 +247,16 @@ période complète de `cycle_seconds` secondes (0,1 à 3600). La réponse est
 # Catalogue local complet, sans connexion au serveur
 ./bin/ledmatrix-client -list-marquee-fonts
 
-./bin/ledmatrix-client -server http://192.168.0.18:8080 \
+./bin/ledmatrix-client -server http://192.168.0.18:7272 \
   -marquee 'Bonjour à tous !' \
   -marquee-font Flashback -marquee-size 20 \
   -marquee-color '#ff8337' -marquee-speed 40
 
-./bin/ledmatrix-client -server http://192.168.0.18:8080 \
+./bin/ledmatrix-client -server http://192.168.0.18:7272 \
   -marquee 'Un texte arc-en-ciel' \
   -marquee-cycle rainbow -marquee-cycle-seconds 6
 
-./bin/ledmatrix-client -server http://192.168.0.18:8080 \
+./bin/ledmatrix-client -server http://192.168.0.18:7272 \
   -marquee 'Une palette personnalisée' \
   -marquee-cycle '#ff8337,#7be0de,#ffffff' -marquee-cycle-seconds 4
 ```
@@ -235,7 +269,7 @@ leur cycle pendant les rebonds. La valeur par défaut `false` conserve le
 défilement en boucle de droite à gauche.
 
 ```bash
-./bin/ledmatrix-client -server http://192.168.0.107:8080 \
+./bin/ledmatrix-client -server http://192.168.0.107:7272 \
   -marquee 'Bonjour !' -marquee-bounce -marquee-speed 30
 ```
 
@@ -254,7 +288,7 @@ une couleur fixe ou un cycle de couleurs. Dans la GUI, choisir « Trajectoire
 verticale → Sinusoïdale (haut / bas) » et régler la durée de l'aller-retour.
 
 ```bash
-./bin/ledmatrix-client -server http://192.168.0.107:8080 \
+./bin/ledmatrix-client -server http://192.168.0.107:7272 \
   -marquee 'Bonjour !' -marquee-vertical-bounce \
   -marquee-vertical-bounce-seconds 4 -marquee-speed 30
 ```
@@ -276,7 +310,7 @@ l’image à la matrice en conservant son ratio, puis téléverse le résultat :
 
 ```bash
 go run ./cmd/ledmatrix-client \
-  -server http://192.168.0.18:8080 \
+  -server http://192.168.0.18:7272 \
   -gif animation.gif \
   -animation-name demo
 ```
@@ -290,7 +324,7 @@ Relance une animation déjà stockée, sans renvoyer le GIF ni les trames :
 
 ```bash
 go run ./cmd/ledmatrix-client \
-  -server http://192.168.0.18:8080 \
+  -server http://192.168.0.18:7272 \
   -play-animation demo
 ```
 
@@ -303,6 +337,54 @@ PNG, JPEG ou HEIC et ne redimensionne aucune image : ces opérations coûteuses 
 du côté client. Seul le paquet de trames préparées est compressé pour le
 transfert et le stockage.
 
+## Découverte des serveurs sur le réseau local
+
+L'option `-scan` du client liste les serveurs GoLedMatrix2 accessibles sur les
+sous-réseaux IPv4 des interfaces actives (Ethernet, Wi-Fi, etc.), sans avoir à
+connaître leur adresse :
+
+```bash
+go run ./cmd/ledmatrix-client -scan
+# Ou après make build-client :
+./bin/ledmatrix-client -scan
+```
+
+Le résultat indique l'URL à utiliser avec `-server`, la géométrie logique de la
+matrice et le backend de chaque adresse détectée, dans l'ordre des adresses IP.
+Le client interroge uniquement `GET /v1/info` et vérifie le contrat RGB24 v1 :
+un autre service HTTP n'est pas affiché et le contenu des matrices n'est pas
+modifié. Les serveurs existants sont compatibles sans mise à jour.
+
+Le port sondé est **7272** par défaut. Pour un autre port ou pour limiter la
+recherche à un sous-réseau précis :
+
+```bash
+./bin/ledmatrix-client -scan -scan-port 9090
+./bin/ledmatrix-client -scan -scan-network 192.168.0.0/24
+./bin/ledmatrix-client -scan -scan-timeout 1s -timeout 3m
+```
+
+Le masque réel de chaque interface détermine le sous-réseau, sans supposer un
+`/24`. Les sous-réseaux qui se chevauchent sont dédupliqués ; les adresses réseau
+et broadcast sont exclues, sauf pour les préfixes `/31` et `/32`. L'adresse du
+client est incluse. La boucle locale et les interfaces point à point (notamment
+les tunnels VPN) ne sont pas parcourues automatiquement ; `-scan-network`
+permet de les sélectionner explicitement.
+
+La recherche lance au maximum 64 requêtes simultanées, avec un délai de 500 ms
+par adresse (`-scan-timeout`) et une limite totale de deux minutes (`-timeout`).
+Un dépassement de la limite totale ou `Ctrl+C` affiche les résultats déjà
+obtenus et signale que le scan est incomplet. Un scan terminé sans résultat
+affiche un message explicite.
+
+Le scan est limité à 65 536 adresses IPv4 au total ; au-delà, le client demande
+de sélectionner un sous-réseau plus petit avec `-scan-network`. Seuls les
+serveurs HTTP joignables sur le port choisi sont détectés : IPv6, HTTPS, les
+autres ports et les machines bloquées par un pare-feu ne sont pas couverts.
+Les proxys HTTP configurés dans l'environnement ne sont pas utilisés.
+`-scan` est une action autonome, à utiliser sans `-gui`, `-image`, `-clock` ou
+autre commande d'affichage ; `-server` n'intervient pas dans la découverte.
+
 ## Interface web du client
 
 Le mode GUI lance un panneau de contrôle web sur la machine du client. Il
@@ -311,7 +393,7 @@ directement le Raspberry Pi et le protocole du serveur reste inchangé.
 
 ```bash
 go run ./cmd/ledmatrix-client \
-  -server http://192.168.0.18:8080 \
+  -server http://192.168.0.18:7272 \
   -gui
 ```
 
@@ -321,6 +403,9 @@ permet de :
 - consulter la connexion, la géométrie, le backend et les statistiques ;
 - consulter les températures internes du serveur, actualisées toutes les cinq
   secondes, ou l'état « Indisponible » si aucun capteur n'est accessible ;
+- régler la luminosité globale de 1 à 100 % avec le curseur « Luminosité » et
+  le bouton « Appliquer » ; la valeur courante est actualisée toutes les cinq
+  secondes sans écraser une modification du curseur en cours ;
 - choisir les trois horloges et leurs couleurs ;
 - faire défiler un texte en boucle ou avec rebond horizontal, avec oscillation
   verticale sinusoïdale optionnelle, police, taille, vitesse, couleur fixe,
@@ -333,6 +418,10 @@ permet de :
 Le choix de police du texte défilant est alimenté par le catalogue embarqué et
 regroupé par famille (`digital`, `fixed`, `modern`, `marquee` et `Go`). Les
 polices ajoutées dans `assets/ttf` sont proposées après recompilation.
+
+Le réglage de luminosité nécessite un serveur intégrant `PUT /v1/brightness`.
+Face à un serveur plus ancien, le curseur est désactivé et un message invite
+à mettre à jour le serveur.
 
 Les images fixes envoyées par la GUI sont automatiquement redimensionnées pour
 remplir la matrice en conservant leur aspect ratio, puis recadrées au centre.
@@ -399,7 +488,7 @@ DoGpioInit              = true
 
 [HTTPserver]
 Addr                    = "detect"
-Port                    = 8080
+Port                    = 7272
 Enabled                 = true
 InfoDisplaySeconds      = 5
 
@@ -548,11 +637,11 @@ appuyer sur `Échap` arrête proprement le serveur.
 Envoyer une couleur ou une image aux dimensions exactes :
 
 ```bash
-go run ./cmd/ledmatrix-client -server http://localhost:8080 -color '#2040ff'
-go run ./cmd/ledmatrix-client -server http://localhost:8080 -image frame.png
-go run ./cmd/ledmatrix-client -server http://localhost:8080 \
+go run ./cmd/ledmatrix-client -server http://localhost:7272 -color '#2040ff'
+go run ./cmd/ledmatrix-client -server http://localhost:7272 -image frame.png
+go run ./cmd/ledmatrix-client -server http://localhost:7272 \
   -clock fancy -clock-color1 '#ff8337' -clock-color2 '#7be0de'
-go run ./cmd/ledmatrix-client -server http://localhost:8080 \
+go run ./cmd/ledmatrix-client -server http://localhost:7272 \
   -gif animation.gif -animation-name demo
 ```
 
@@ -567,13 +656,13 @@ Si la fenêtre apparaît mais reste noire :
 1. vérifier que le journal contient `backend=simulation` et la géométrie
    attendue ;
 2. consulter le contrat détecté avec
-   `curl http://localhost:8080/v1/info` ;
+   `curl http://localhost:7272/v1/info` ;
 3. envoyer une couleur de contrôle avec la commande ci-dessus ;
 4. demander à nouveau l’écran technique avec :
 
 ```bash
 go run ./cmd/ledmatrix-client \
-  -server http://localhost:8080 \
+  -server http://localhost:7272 \
   -show-info
 ```
 
@@ -721,7 +810,7 @@ build télécharge les modules Go et nécessite donc un accès sortant à Intern
 depuis le Pi ; aucun accès entrant depuis Internet n'est nécessaire.
 
 La vérification utilise par défaut
-`http://127.0.0.1:8080/healthz`. Si le port HTTP configuré est différent,
+`http://127.0.0.1:7272/healthz`. Si le port HTTP configuré est différent,
 préciser l'URL correspondante. Si HTTP est désactivé, passer une valeur vide :
 
 ```bash
@@ -739,21 +828,21 @@ Commandes de diagnostic sur le Raspberry Pi :
 ```bash
 sudo systemctl status goledmatrix
 sudo journalctl -u goledmatrix -f
-curl http://127.0.0.1:8080/v1/info
+curl http://127.0.0.1:7272/v1/info
 ```
 
 Depuis le poste client, l'API est accessible avec :
 
 ```bash
-curl http://raspberrypi.local:8080/v1/info
+curl http://raspberrypi.local:7272/v1/info
 go run ./cmd/ledmatrix-client \
-  -server http://raspberrypi.local:8080 \
+  -server http://raspberrypi.local:7272 \
   -color '#2040ff'
 ```
 
 Le service écoute selon `HTTPserver.Addr`. Avec `Addr = "detect"`, il écoute sur
 toutes les interfaces du Raspberry Pi. Pour conserver l'accès au réseau local
-uniquement, ne pas configurer de redirection du port 8080 sur le routeur. Si le
+uniquement, ne pas configurer de redirection du port 7272 sur le routeur. Si le
 Pi dispose d'un pare-feu, autoriser uniquement le sous-réseau local utilisé.
 
 ## Choix de performance

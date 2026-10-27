@@ -47,6 +47,7 @@ type Info struct {
 	PixelFormat     string        `json:"pixel_format"`
 	FrameBytes      int           `json:"frame_bytes"`
 	Backend         string        `json:"backend"`
+	Brightness      int           `json:"brightness"`
 	BaseURLs        []string      `json:"base_urls"`
 	StartedAt       time.Time     `json:"started_at"`
 	UptimeSeconds   int64         `json:"uptime_seconds"`
@@ -55,6 +56,10 @@ type Info struct {
 }
 
 type Option func(*API) error
+
+type BrightnessState struct {
+	Brightness int `json:"brightness"`
+}
 
 type ClockSelection struct {
 	Mode   string
@@ -170,6 +175,7 @@ func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.health)
 	mux.HandleFunc("GET /v1/info", a.info)
+	mux.HandleFunc("PUT /v1/brightness", a.setBrightness)
 	mux.HandleFunc("PUT /v1/frame", a.putFrame)
 	mux.HandleFunc("POST /v1/display-info", a.displayInfo)
 	mux.HandleFunc("POST /v1/clock", a.displayClock)
@@ -207,12 +213,44 @@ func (a *API) currentInfo() Info {
 		PixelFormat:     frame.PixelFormat,
 		FrameBytes:      a.frameSize,
 		Backend:         a.backend,
+		Brightness:      a.renderer.Brightness(),
 		BaseURLs:        append([]string(nil), baseURLs...),
 		StartedAt:       a.startedAt,
 		UptimeSeconds:   int64(time.Since(a.startedAt).Seconds()),
 		Stats:           a.renderer.Stats(),
 		System:          system,
 	}
+}
+
+func (a *API) setBrightness(w http.ResponseWriter, r *http.Request) {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeProblem(w, http.StatusUnsupportedMediaType, "unsupported media type", "Content-Type must be application/json")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request struct {
+		Brightness *int `json:"brightness"`
+	}
+	if err := decoder.Decode(&request); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid brightness", err.Error())
+		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		writeProblem(w, http.StatusBadRequest, "invalid brightness", "body must contain one JSON object")
+		return
+	}
+	if request.Brightness == nil || *request.Brightness < 1 || *request.Brightness > 100 {
+		writeProblem(w, http.StatusBadRequest, "invalid brightness", "brightness must be an integer between 1 and 100")
+		return
+	}
+	if err := a.renderer.SetBrightness(r.Context(), *request.Brightness); err != nil {
+		writeProblem(w, http.StatusServiceUnavailable, "brightness unavailable", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, BrightnessState{Brightness: *request.Brightness})
 }
 
 // ShowTechnicalInfo queues the temporary information screen and restores the
