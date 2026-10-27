@@ -430,9 +430,18 @@ commande de découverte.
 
 ## Interface web du client
 
-Le client lance **par défaut** le panneau de contrôle web sur
-[http://127.0.0.1:8080](http://127.0.0.1:8080). L'option `-gui` est remplacée par
-`-no-gui`, qui active les commandes sans interface.
+Le client lance **par défaut** le panneau de contrôle web sur le port **8080**
+de l'IP de son interface réseau par défaut (`-gui-listen detect:8080`). L'adresse
+complète à ouvrir est affichée au démarrage, par exemple
+`http://192.168.0.42:8080`. L'option `-gui` est remplacée par `-no-gui`, qui active
+les commandes sans interface.
+
+La détection utilise l'adresse source choisie par le routage du système, en
+privilégiant IPv4 puis IPv6. Elle ne dépend ni de l'ordre des interfaces, ni de
+l'adresse du Raspberry Pi, et ne transmet aucun paquet ni requête DNS. En
+l'absence de route utilisable, le panneau reste accessible localement sur
+`http://127.0.0.1:8080`. L'adresse est choisie au démarrage : relancer le client
+si l'IP de l'interface change.
 
 ```bash
 # Interface web et découverte automatique des serveurs
@@ -445,6 +454,9 @@ go run ./cmd/ledmatrix-client
 
 # Adapter la découverte au réseau ou à un port serveur différent
 ./bin/ledmatrix-client -scan-network 192.168.0.0/24 -scan-port 7272
+
+# Restreindre explicitement l'interface web à la machine locale
+./bin/ledmatrix-client -gui-listen 127.0.0.1:8080
 ```
 
 Sans `-server`, le client recherche les serveurs en arrière-plan dès son
@@ -524,10 +536,12 @@ temporaires sont supprimés après la conversion.
 Les GIF conservent leur ratio et sont automatiquement adaptés à la géométrie
 avec des bandes si nécessaire, comme avec l’option CLI `-gif`.
 
-Par défaut, la GUI écoute uniquement sur la boucle locale. Une autre adresse
-peut être choisie avec `-gui-listen`, par exemple `127.0.0.1:9090`. Le projet
-n’ayant pas encore d’authentification, il est déconseillé de l’exposer avec
-`0.0.0.0` sur un réseau non maîtrisé.
+La GUI est donc accessible depuis le réseau de l'interface choisie par défaut.
+Le projet n'ayant pas encore d'authentification, réserver cet accès à un réseau
+de confiance. Pour garder un accès strictement local, utiliser
+`-gui-listen 127.0.0.1:8080`. Une adresse explicite reste prioritaire : par
+exemple `-gui-listen 192.168.0.42:9090` pour une interface précise, ou
+`-gui-listen 0.0.0.0:8080` pour toutes les interfaces IPv4.
 
 ## Client sans interface
 

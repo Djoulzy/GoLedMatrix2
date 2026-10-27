@@ -8,8 +8,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -105,6 +107,88 @@ func TestHeadlessDiscoversUniqueServer(t *testing.T) {
 	}
 }
 
+func TestGUIListenAddressUsesKernelRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name, address, ipv4, ipv6, want string
+		calls                           int
+	}{
+		{"default IPv4 route", defaultGUIListenAddress, "192.168.0.113", "2001:db8::2", "192.168.0.113:8080", 1},
+		{"VPN default route", "detect:9090", "10.8.0.2", "", "10.8.0.2:9090", 1},
+		{"IPv6-only route", "detect:8080", "", "2001:db8::2", "[2001:db8::2]:8080", 2},
+		{"offline fallback", "detect:8080", "", "", "127.0.0.1:8080", 2},
+		{"ignore routed loopback", "detect:8080", "127.0.0.1", "2001:db8::2", "[2001:db8::2]:8080", 2},
+		{"ignore unspecified IP", "detect:8080", "0.0.0.0", "::", "127.0.0.1:8080", 2},
+		{"ignore link-local IP", "detect:8080", "169.254.1.2", "fe80::1", "127.0.0.1:8080", 2},
+		{"ignore multicast IP", "detect:8080", "224.0.0.1", "ff02::1", "127.0.0.1:8080", 2},
+		{"case-insensitive detection", "DETECT:0", "192.168.0.113", "", "192.168.0.113:0", 1},
+		{"explicit loopback", "127.0.0.1:8080", "192.168.0.113", "", "127.0.0.1:8080", 0},
+		{"explicit wildcard", "0.0.0.0:8080", "192.168.0.113", "", "0.0.0.0:8080", 0},
+		{"explicit all interfaces", ":8080", "192.168.0.113", "", ":8080", 0},
+		{"explicit IPv6", "[::1]:9090", "192.168.0.113", "", "[::1]:9090", 0},
+		{"explicit hostname", "localhost:8080", "192.168.0.113", "", "localhost:8080", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var probes []string
+			got, err := guiListenAddress(tc.address, func(network, destination string) net.IP {
+				probes = append(probes, network+" "+destination)
+				if network == "udp4" {
+					return net.ParseIP(tc.ipv4)
+				}
+				return net.ParseIP(tc.ipv6)
+			})
+			if err != nil || got != tc.want {
+				t.Fatalf("GUI listen address = %q, %v; want %q", got, err, tc.want)
+			}
+			wantProbes := []string{"udp4 192.0.2.1:9", "udp6 [2001:db8::1]:9"}[:tc.calls]
+			if len(probes) != tc.calls || (tc.calls > 0 && !reflect.DeepEqual(probes, wantProbes)) {
+				t.Fatalf("route probes = %v, want %v", probes, wantProbes)
+			}
+		})
+	}
+}
+
+func TestGUIListenAddressRejectsMissingPort(t *testing.T) {
+	for _, address := range []string{"detect", "127.0.0.1", "[::1]"} {
+		if _, err := guiListenAddress(address, func(string, string) net.IP {
+			t.Fatal("invalid listen address triggered route detection")
+			return nil
+		}); err == nil {
+			t.Fatalf("invalid listen address accepted: %q", address)
+		}
+	}
+}
+
+func TestGUIStartsOnDetectedInterface(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(server.Info{ProtocolVersion: "1", Width: 64, Height: 32, Backend: "memory"})
+	}))
+	defer api.Close()
+	address, err := guiListenAddress("detect:0", guiRouteSourceIP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantHost, _, err := net.SplitHostPort(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawURL := startGUIProcess(t, []string{"-gui-listen", "detect:0", "-server", api.URL})
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Hostname() != wantHost || parsed.Port() == "0" {
+		t.Fatalf("GUI startup URL = %s, %v; want host %s", rawURL, err, wantHost)
+	}
+	transport := &http.Transport{Proxy: nil}
+	defer transport.CloseIdleConnections()
+	httpClient := &http.Client{Transport: transport, Timeout: time.Second}
+	response, err := httpClient.Get(rawURL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("GUI unavailable on detected address: %s", response.Status)
+	}
+}
+
 func TestGUIAndHeadlessFlagRules(t *testing.T) {
 	for _, tc := range []struct {
 		args    []string
@@ -114,7 +198,7 @@ func TestGUIAndHeadlessFlagRules(t *testing.T) {
 		{[]string{"-color", "#ffffff"}, "CLI actions require -no-gui", true},
 		{[]string{"-no-gui"}, "provide exactly one", true},
 		{[]string{"-gui"}, "flag provided but not defined: -gui", true},
-		{[]string{"-h"}, `127.0.0.1:8080`, false},
+		{[]string{"-h"}, `detect:8080`, false},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		command := exec.CommandContext(ctx, os.Args[0], append([]string{"-test.run=^TestClientCLIHelper$", "--"}, tc.args...)...)

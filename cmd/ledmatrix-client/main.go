@@ -53,7 +53,7 @@ func main() {
 	playAnimation := flag.String("play-animation", "", "play a previously stored animation")
 	animationLoops := flag.Int("animation-loops", -1, "total loops: 0 infinite, -1 uses the GIF value")
 	noGUI := flag.Bool("no-gui", false, "run one headless command instead of the default graphical client")
-	guiListen := flag.String("gui-listen", "127.0.0.1:8080", "GUI HTTP listen address")
+	guiListen := flag.String("gui-listen", defaultGUIListenAddress, "GUI HTTP listen address (detect uses the default network interface)")
 	timeout := flag.Duration("timeout", 2*time.Minute, "HTTP request timeout and total server discovery limit")
 	flag.Parse()
 	brightnessSelected := false
