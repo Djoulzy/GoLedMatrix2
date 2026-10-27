@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"strconv"
 	"strings"
@@ -29,6 +30,7 @@ type matrixClient interface {
 	Info(context.Context) (server.Info, error)
 	Send(context.Context, frame.Frame) (uint64, error)
 	DisplayInfo(context.Context) error
+	Shutdown(context.Context, bool) error
 	DisplayClock(context.Context, string, string, string) error
 	DisplayMarquee(context.Context, marquee.Options) (marquee.Options, error)
 	UploadAnimation(context.Context, string, animation.Bundle, bool) (animation.Metadata, error)
@@ -58,6 +60,7 @@ func newHandler(api matrixClient) http.Handler {
 	mux.HandleFunc("POST /api/marquee", gui.marquee)
 	mux.HandleFunc("GET /api/marquee/fonts", marqueeFonts)
 	mux.HandleFunc("POST /api/display-info", gui.displayInfo)
+	mux.HandleFunc("POST /api/shutdown", gui.shutdown)
 	mux.HandleFunc("POST /api/animations", gui.uploadAnimation)
 	mux.HandleFunc("POST /api/animations/play", gui.playAnimation)
 	return securityHeaders(mux)
@@ -170,6 +173,23 @@ func (g *GUI) displayInfo(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
 }
 
+func (g *GUI) shutdown(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	var request *server.ShutdownRequest
+	if err := decodeJSON(r, &request); err != nil || request == nil {
+		if err == nil {
+			err = errors.New("un objet JSON est requis")
+		}
+		writeError(w, http.StatusBadRequest, "Demande d’arrêt invalide", err)
+		return
+	}
+	if err := g.client.Shutdown(r.Context(), request.PowerOff); err != nil {
+		writeError(w, http.StatusBadGateway, "Arrêt du serveur impossible", err)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{"status": "shutting_down", "power_off": request.PowerOff})
+}
+
 func (g *GUI) marquee(w http.ResponseWriter, r *http.Request) {
 	var options marquee.Options
 	if err := decodeJSON(r, &options); err != nil {
@@ -258,13 +278,17 @@ func (g *GUI) playAnimation(w http.ResponseWriter, r *http.Request) {
 }
 
 func decodeJSON(r *http.Request, target any) error {
-	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
 		return errors.New("Content-Type doit être application/json")
 	}
 	decoder := json.NewDecoder(io.LimitReader(r.Body, 64<<10))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
 		return err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return errors.New("le corps doit contenir un seul objet JSON")
 	}
 	return nil
 }

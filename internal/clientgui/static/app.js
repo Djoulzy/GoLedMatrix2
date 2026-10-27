@@ -3,6 +3,9 @@ const $ = (selector) => document.querySelector(selector);
 const state = {
   busy: 0,
   geometry: null,
+  serverInfo: null,
+  shuttingDown: false,
+  controlsDisabled: false,
 };
 
 function setActivity(message) {
@@ -60,9 +63,39 @@ function displayTemperatures(system, offline = false) {
   status.textContent = offline ? "Indisponible — serveur hors ligne" : "Indisponible — aucun capteur accessible";
 }
 
+function updateShutdownButton() {
+  const button = $("#shutdown");
+  const hint = $("#shutdown-hint");
+  const info = state.serverInfo;
+  const powerOff = info?.backend === "rpi";
+  button.textContent = powerOff ? "Éteindre le Raspberry Pi" : "Arrêter le serveur";
+  button.disabled = state.shuttingDown || !info?.shutdown || (powerOff && !info.shutdown.power_off);
+  if (!info) {
+    hint.textContent = "Connexion au serveur requise pour l’arrêt.";
+  } else if (!info.shutdown) {
+    hint.textContent = "Mettez à jour le serveur pour activer l’arrêt à distance.";
+  } else if (powerOff && !info.shutdown.power_off) {
+    hint.textContent = `Extinction indisponible : ${info.shutdown.power_off_unavailable_reason || "permission système manquante"}`;
+  } else {
+    hint.textContent = powerOff
+      ? "Arrête le serveur et la dalle, puis éteint le système. Une confirmation sera demandée."
+      : "Arrête uniquement le serveur ; la machine reste allumée. Une confirmation sera demandée.";
+  }
+}
+
+function disableServerControls(disabled) {
+  state.controlsDisabled = disabled;
+  for (const button of document.querySelectorAll("main button")) button.disabled = disabled;
+  updateShutdownButton();
+}
+
 async function refreshInfo(silent = false) {
+  if (state.shuttingDown) return;
   try {
     const info = await request("/api/info");
+    // An earlier poll must not overwrite a shutdown accepted in the meantime.
+    if (state.shuttingDown) return;
+    state.serverInfo = info;
     state.geometry = {width: info.width, height: info.height};
     $("#connection").className = "connection online";
     $("#connection-label").textContent = "Serveur connecté";
@@ -74,11 +107,16 @@ async function refreshInfo(silent = false) {
     const accepted = info.stats?.accepted || 0;
     const rendered = info.stats?.rendered || 0;
     $("#stats").textContent = `${rendered} / ${accepted} trames rendues`;
+    if (state.controlsDisabled) disableServerControls(false);
+    else updateShutdownButton();
     if (!silent) toast("État du serveur actualisé");
   } catch (error) {
+    if (state.shuttingDown) return;
+    state.serverInfo = null;
     $("#connection").className = "connection offline";
     $("#connection-label").textContent = "Serveur hors ligne";
     displayTemperatures(null, true);
+    updateShutdownButton();
     if (!silent) toast(error.message, true);
   }
 }
@@ -94,6 +132,7 @@ function jsonOptions(body) {
 function bindForm(selector, action) {
   $(selector).addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (state.shuttingDown || state.controlsDisabled) return;
     const button = event.currentTarget.querySelector("button[type=submit]");
     button.disabled = true;
     try {
@@ -103,7 +142,7 @@ function bindForm(selector, action) {
       setActivity("La commande a échoué.");
       toast(error.message, true);
     } finally {
-      button.disabled = false;
+      button.disabled = state.shuttingDown || state.controlsDisabled;
     }
   });
 }
@@ -226,7 +265,9 @@ bindForm("#play-form", async (form) => {
 });
 
 $("#display-info").addEventListener("click", async (event) => {
-  event.currentTarget.disabled = true;
+  if (state.shuttingDown || state.controlsDisabled) return;
+  const button = event.currentTarget;
+  button.disabled = true;
   try {
     setActivity("Demande d’affichage des informations…");
     await request("/api/display-info", {method: "POST"});
@@ -235,11 +276,52 @@ $("#display-info").addEventListener("click", async (event) => {
   } catch (error) {
     toast(error.message, true);
   } finally {
-    event.currentTarget.disabled = false;
+    button.disabled = state.shuttingDown || state.controlsDisabled;
   }
 });
 
-$("#refresh").addEventListener("click", () => refreshInfo());
+$("#shutdown").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  if (button.disabled || state.shuttingDown) return;
+  const powerOff = state.serverInfo?.backend === "rpi";
+  const confirmation = powerOff
+    ? "Éteindre le Raspberry Pi ? Le serveur et la dalle seront arrêtés proprement, puis le système sera éteint. Attendez la fin de l’arrêt avant de débrancher l’alimentation."
+    : "Arrêter proprement le serveur LED ? La machine restera allumée. Il faudra relancer le serveur pour utiliser la matrice.";
+  if (!window.confirm(confirmation)) return;
+  state.shuttingDown = true;
+  disableServerControls(true);
+  $("#refresh").disabled = true;
+  $("#connection").className = "connection offline";
+  $("#connection-label").textContent = "Arrêt en cours…";
+  setActivity(powerOff ? "Demande d’extinction du Raspberry Pi…" : "Demande d’arrêt du serveur…");
+  try {
+    await request("/api/shutdown", jsonOptions({power_off: powerOff}));
+    const message = powerOff ? "Extinction du Raspberry Pi demandée" : "Arrêt du serveur demandé";
+    $("#connection-label").textContent = message;
+    displayTemperatures(null, true);
+    $("#shutdown-hint").textContent = powerOff
+      ? "Attendez la fin de l’arrêt du système avant de débrancher l’alimentation."
+      : "Relancez le serveur puis cliquez sur Actualiser pour vous reconnecter.";
+    setActivity(`${message}.`);
+    toast(message);
+    // Keep polling and display commands paused: being offline is expected.
+    // The refresh button lets the user reconnect after a subsequent startup.
+  } catch (error) {
+    state.shuttingDown = false;
+    disableServerControls(false);
+    setActivity("L’arrêt a échoué.");
+    toast(error.message, true);
+    await refreshInfo(true);
+  } finally {
+    $("#refresh").disabled = false;
+  }
+});
+
+$("#refresh").addEventListener("click", () => {
+  if ($("#refresh").disabled) return;
+  state.shuttingDown = false;
+  refreshInfo();
+});
 $("#color-form input[type=color]").addEventListener("input", (event) => {
   $("#color-value").textContent = event.target.value;
 });

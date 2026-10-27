@@ -177,12 +177,47 @@ func runSimulation(cfg options) error {
 }
 
 func serve(cfg options, target display.Display, backendName string, externalDone <-chan struct{}) error {
-	defer target.Close()
+	powerOff, err := newPowerOffAction(backendName)
+	reason := ""
+	if err != nil {
+		reason = err.Error()
+		slog.Warn("system power-off unavailable", "error", err)
+	}
+	return serveWithPowerOff(cfg, target, backendName, externalDone, powerOff, reason)
+}
 
+// The system power-off happens only after HTTP requests have drained, rendering
+// has stopped, and the native driver has released the GPIOs.
+func serveWithPowerOff(cfg options, target display.Display, backendName string, externalDone <-chan struct{}, powerOff *powerOffAction, reason string) error {
+	requested, err := serveDisplay(cfg, target, backendName, externalDone, powerOff, reason)
+	err = errors.Join(err, target.Close())
+	if err != nil || !requested {
+		return err
+	}
+	if powerOff == nil {
+		return errors.New("system power-off is unavailable")
+	}
+	slog.Info("display stopped; requesting system power-off")
+	return powerOff.run(context.Background())
+}
+
+func serveDisplay(cfg options, target display.Display, backendName string, externalDone <-chan struct{}, powerOff *powerOffAction, reason string) (bool, error) {
 	signalContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx, cancel := context.WithCancel(signalContext)
 	defer cancel()
+	var workers sync.WaitGroup
+	runWorker := func(run func()) {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			run()
+		}()
+	}
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
 	if externalDone != nil {
 		go func() {
 			select {
@@ -205,41 +240,64 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 		cfg.config.Clock.Color2,
 	)
 	if err != nil {
-		return err
+		return false, err
 	}
+	defer func() {
+		cancel()
+		<-clockController.done
+	}()
 
 	if !cfg.config.HTTP.Enabled {
-		go renderer.Run(ctx)
+		runWorker(func() { renderer.Run(ctx) })
 		slog.Info("HTTP server disabled; matrix process waiting for shutdown",
 			"backend", backendName, "width", width, "height", height)
 		<-ctx.Done()
-		return nil
+		return false, nil
 	}
 
 	listen := cfg.listen
 	if listen == "" {
 		listen, err = cfg.config.HTTP.ListenAddress()
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 	listener, err := net.Listen("tcp", listen)
 	if err != nil {
-		return fmt.Errorf("listen on %s: %w", listen, err)
+		return false, fmt.Errorf("listen on %s: %w", listen, err)
 	}
 	defer listener.Close()
 	boundAddress := listener.Addr().String()
 	animationStore, err := animation.NewStore(cfg.config.Animation.Directory)
 	if err != nil {
-		return err
+		return false, err
 	}
 	animationPlayer := animation.NewPlayer(ctx, animationStore, renderer, width, height)
+	defer animationPlayer.Stop()
 	marqueePlayer := marquee.NewPlayer(ctx, renderer)
 	defer marqueePlayer.Stop()
 	temperatures := thermal.New()
-	go temperatures.Run(ctx)
-	apiOptions := make([]server.Option, 0, 6)
+	runWorker(func() { temperatures.Run(ctx) })
+	shutdownRequests := make(chan server.ShutdownRequest, 1)
+	apiOptions := make([]server.Option, 0, 7)
 	apiOptions = append(apiOptions,
+		server.WithShutdown(server.ShutdownInfo{
+			PowerOff: powerOff != nil, PowerOffUnavailableReason: reason,
+		}, func(requestCtx context.Context, request server.ShutdownRequest) error {
+			if request.PowerOff {
+				if powerOff == nil {
+					return errors.New("system power-off is unavailable")
+				}
+				if err := powerOff.check(requestCtx); err != nil {
+					return err
+				}
+			}
+			if err := requestCtx.Err(); err != nil {
+				return err
+			}
+			shutdownRequests <- request
+			return nil
+		}),
 		server.WithTemperatures(temperatures.Snapshot),
 		server.WithBaseURLs(func() []string { return advertisedBaseURLs(boundAddress) }),
 		server.WithClockDisplay(func(selection server.ClockSelection) (server.ClockState, error) {
@@ -276,11 +334,12 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 	}
 	api, err := server.New(width, height, backendName, renderer, apiOptions...)
 	if err != nil {
-		return err
+		return false, err
 	}
+	requests := &requestTracker{next: api.Handler()}
 	httpServer := &http.Server{
 		Addr:              listen,
-		Handler:           api.Handler(),
+		Handler:           requests,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       2 * time.Minute,
 		WriteTimeout:      10 * time.Second,
@@ -291,28 +350,39 @@ func serve(cfg options, target display.Display, backendName string, externalDone
 			slog.Warn("unable to display startup technical information", "error", err)
 		}
 	}
-	go renderer.Run(ctx)
+	runWorker(func() { renderer.Run(ctx) })
 	errs := make(chan error, 1)
 	go func() {
 		slog.Info("matrix server listening", "address", boundAddress, "backend", backendName, "width", width, "height", height)
 		errs <- httpServer.Serve(listener)
 	}()
 
+	var requested bool
+	var serveErr error
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return httpServer.Shutdown(shutdownCtx)
+	case request := <-shutdownRequests:
+		requested = request.PowerOff
+		slog.Info("graceful shutdown requested", "power_off", requested)
 	case err := <-errs:
-		if errors.Is(err, http.ErrServerClosed) {
-			return nil
+		if !errors.Is(err, http.ErrServerClosed) {
+			serveErr = err
 		}
-		return err
 	}
+	shutdownErr := shutdownHTTP(httpServer, requests)
+	// A signal can race with a request that was already being handled. Draining
+	// HTTP guarantees that any accepted power-off has reached this channel.
+	select {
+	case request := <-shutdownRequests:
+		requested = request.PowerOff
+	default:
+	}
+	return requested, errors.Join(serveErr, shutdownErr)
 }
 
 type clockController struct {
 	mu       sync.Mutex
+	done     chan struct{}
 	mode     matrixclock.Mode
 	renderer *render.Renderer
 	width    int
@@ -335,11 +405,13 @@ func startClock(
 	controller := &clockController{
 		mode: mode, renderer: renderer, width: width, height: height,
 		color1: color1, color2: color2,
+		done: make(chan struct{}),
 	}
 	if err := controller.update(time.Now()); err != nil {
 		return nil, fmt.Errorf("initialize clock: %w", err)
 	}
 	go func() {
+		defer close(controller.done)
 		for {
 			now := time.Now()
 			nextSecond := now.Truncate(time.Second).Add(time.Second)

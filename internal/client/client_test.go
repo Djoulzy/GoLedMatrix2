@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,6 +87,34 @@ func TestDisplayInfo(t *testing.T) {
 	}
 	if method != http.MethodPost || path != "/v1/display-info" {
 		t.Fatalf("request = %s %s", method, path)
+	}
+}
+
+func TestShutdown(t *testing.T) {
+	api, err := New("http://matrix.test/prefix", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, powerOff := range []bool{false, true} {
+		api.http.Transport = handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != "/prefix/v1/shutdown" || r.Header.Get("Content-Type") != "application/json" {
+				t.Errorf("request = %s %s %s", r.Method, r.URL, r.Header.Get("Content-Type"))
+			}
+			var request server.ShutdownRequest
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil || request.PowerOff != powerOff {
+				t.Errorf("shutdown payload = %+v, %v", request, err)
+			}
+			w.WriteHeader(http.StatusAccepted)
+		})}
+		if err := api.Shutdown(context.Background(), powerOff); err != nil {
+			t.Fatal(err)
+		}
+	}
+	api.http.Transport = handlerTransport{handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "power-off permission missing", http.StatusServiceUnavailable)
+	})}
+	if err := api.Shutdown(context.Background(), true); err == nil || !strings.Contains(err.Error(), "power-off permission missing") {
+		t.Fatalf("server shutdown error = %v", err)
 	}
 }
 

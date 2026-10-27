@@ -5,7 +5,7 @@ ChainLength             = 1
 Parallel                = 2
 
 PWMBits                 = 11
-PWMLSBNanoseconds       = 130
+PWMLSBNanoseconds       = 100
 PWMDitherBits           = 0
 Brightness              = 100
 ScanMode                = 0

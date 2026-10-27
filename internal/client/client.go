@@ -97,6 +97,29 @@ func (c *Client) DisplayInfo(ctx context.Context) error {
 	return nil
 }
 
+// Shutdown requests a graceful server shutdown, optionally followed by a host
+// power-off. A successful response acknowledges the request, not its completion.
+func (c *Client) Shutdown(ctx context.Context, powerOff bool) error {
+	body, err := json.Marshal(server.ShutdownRequest{PowerOff: powerOff})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint("/v1/shutdown"), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		return responseError(resp)
+	}
+	return nil
+}
+
 func (c *Client) DisplayClock(ctx context.Context, mode, color1, color2 string) error {
 	query := url.Values{"mode": []string{mode}}
 	if color1 != "" {

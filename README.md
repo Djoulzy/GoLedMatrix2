@@ -81,6 +81,7 @@ Décrit le contrat attendu par le serveur :
   "started_at": "2026-07-28T10:00:00Z",
   "uptime_seconds": 42,
   "stats": {"accepted": 0, "rendered": 0, "failed": 0},
+  "shutdown": {"power_off": false},
   "system": {
     "temperatures": [{"sensor": "thermal_zone0", "name": "cpu-thermal", "celsius": 48.5}],
     "sampled_at": "2026-07-28T10:00:40Z"
@@ -111,6 +112,47 @@ n'a pu être lu. Les capteurs absents, illisibles ou invalides sont ignorés : l
 liste est vide si aucun n'est accessible, sans bloquer le serveur ni conserver
 d'anciennes températures. Hors Linux, la liste est vide et `sampled_at` absent.
 Aucune bibliothèque supplémentaire ni commande externe n'est nécessaire.
+
+`shutdown` annonce le support de l'arrêt à distance. `power_off` indique si le
+serveur peut aussi éteindre son système Linux/RPi sans demande de mot de passe.
+Si cette opération n'est pas disponible, `power_off_unavailable_reason` en donne
+la raison. Les anciens serveurs n'annoncent pas ce champ.
+
+### `POST /v1/shutdown`
+
+- `Content-Type: application/json` ;
+- corps `{"power_off": true}` pour arrêter proprement le serveur et éteindre
+  le Raspberry Pi ; `{"power_off": false}` pour arrêter seulement le serveur ;
+- réponse `202 Accepted` avec `{"status":"shutting_down","power_off":true}`.
+
+La réponse confirme la prise en compte de la demande, pas la fin de l'extinction.
+Les requêtes déjà en cours disposent de cinq secondes pour se terminer avant
+fermeture de leurs connexions. Le serveur arrête ses producteurs et attend la
+fin du rendu, puis ferme le pilote natif, qui éteint les LED et libère les GPIO.
+Seulement ensuite, `systemctl --no-ask-password poweroff` demande l'arrêt normal
+du système : aucun arrêt forcé ni coupure brutale de l'alimentation.
+Voir aussi la [documentation de l'arrêt système de systemd](https://www.freedesktop.org/software/systemd/man/254/systemd-halt.service.html).
+
+L'extinction système est réservée au backend `rpi` sous Linux avec `systemd`.
+Elle est refusée si les permissions nécessaires manquent, sans arrêter le
+serveur. Les demandes identiques sont idempotentes ; changer le mode d'arrêt
+après acceptation renvoie `409 Conflict`. Si le nettoyage ou la commande finale
+échoue après acceptation, le processus signale l'erreur dans ses journaux et
+termine en échec ; une erreur de nettoyage empêche l'extinction système.
+
+Le déploiement installe une règle `sudoers`, validée par `visudo`, qui autorise
+uniquement le compte `daemon` (utilisé par défaut par le pilote natif après
+abandon des privilèges root) à exécuter cette commande exacte sans mot de passe.
+Le serveur ne conserve pas des droits root pour cette fonction. Un serveur déjà
+installé doit être **redéployé** pour recevoir la nouvelle règle.
+Lors d'une installation manuelle, utiliser `deploy/install-rpi.sh` après le
+build matériel, ou faire configurer cette permission limitée par
+l'administrateur système.
+
+L'API n'a pas encore d'authentification : toute personne pouvant la joindre peut
+demander un arrêt. La réserver à un réseau local de confiance et ne pas l'exposer
+sur Internet. Le JSON est obligatoire et aucun accès CORS n'est accordé, afin
+d'empêcher un formulaire provenant d'un autre site de déclencher un arrêt.
 
 ### `PUT /v1/frame`
 
@@ -328,7 +370,17 @@ permet de :
 - envoyer une couleur, une image PNG/JPEG/HEIC ou un GIF ;
 - prétraiter, nommer, stocker et lancer un GIF sur le Pi ;
 - relancer une animation persistante en saisissant son nom ;
-- demander l’affichage temporaire des informations techniques.
+- demander l’affichage temporaire des informations techniques ;
+- éteindre proprement le Raspberry Pi, avec confirmation, depuis le panneau
+  « Outils » (en mémoire/simulation, seul le serveur est arrêté).
+
+Après une demande d'arrêt, les commandes et l'actualisation automatique sont
+suspendues : le serveur hors ligne est attendu. Le client local reste ouvert.
+Après redémarrage du Pi ou du serveur, cliquer sur « Actualiser » pour se
+reconnecter. Attendre la fin de l'arrêt du système avant de débrancher
+l'alimentation. Si les permissions d'extinction manquent ou si le serveur est
+trop ancien, le bouton est désactivé et indique la raison ; le client ne se
+rabat pas silencieusement sur un simple arrêt du serveur RPi.
 
 Le choix de police du texte défilant est alimenté par le catalogue embarqué et
 regroupé par famille (`digital`, `fixed`, `modern`, `marquee` et `Go`). Les
@@ -712,8 +764,9 @@ La commande :
 3. valide le fichier TOML ;
 4. installe le binaire dans `/opt/goledmatrix2/` ;
 5. installe la configuration dans `/etc/goledmatrix2/server.toml` ;
-6. active et redémarre `goledmatrix.service` ;
-7. vérifie `/healthz` depuis le Pi.
+6. valide et installe la permission limitée d'extinction système ;
+7. active et redémarre `goledmatrix.service` ;
+8. vérifie `/healthz` depuis le Pi.
 
 `sudo` peut demander le mot de passe du compte distant pendant l'installation.
 Les déploiements suivants utilisent exactement la même commande. Le premier

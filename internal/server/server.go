@@ -2,6 +2,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -30,6 +31,10 @@ type API struct {
 	baseURLs        []string
 	baseURLProvider func() []string
 	temperatures    func() thermal.Stats
+	shutdown        func(context.Context, ShutdownRequest) error
+	shutdownInfo    *ShutdownInfo
+	shutdownMu      sync.Mutex
+	shutdownRequest *ShutdownRequest
 
 	technicalFrame    func(Info) (frame.Frame, error)
 	technicalDuration time.Duration
@@ -52,6 +57,31 @@ type Info struct {
 	UptimeSeconds   int64         `json:"uptime_seconds"`
 	Stats           render.Stats  `json:"stats"`
 	System          thermal.Stats `json:"system"`
+	Shutdown        *ShutdownInfo `json:"shutdown,omitempty"`
+}
+
+// ShutdownInfo advertises remote shutdown support. PowerOff is only enabled
+// when the host can be powered off without an interactive password prompt.
+type ShutdownInfo struct {
+	PowerOff                  bool   `json:"power_off"`
+	PowerOffUnavailableReason string `json:"power_off_unavailable_reason,omitempty"`
+}
+
+type ShutdownRequest struct {
+	PowerOff bool `json:"power_off"`
+}
+
+// WithShutdown supplies a controller that queues a shutdown, without waiting
+// for it to finish. The HTTP server must drain this request before exiting.
+func WithShutdown(info ShutdownInfo, request func(context.Context, ShutdownRequest) error) Option {
+	return func(api *API) error {
+		if request == nil {
+			return errors.New("shutdown controller is required")
+		}
+		api.shutdownInfo = &info
+		api.shutdown = request
+		return nil
+	}
 }
 
 type Option func(*API) error
@@ -170,6 +200,7 @@ func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.health)
 	mux.HandleFunc("GET /v1/info", a.info)
+	mux.HandleFunc("POST /v1/shutdown", a.requestShutdown)
 	mux.HandleFunc("PUT /v1/frame", a.putFrame)
 	mux.HandleFunc("POST /v1/display-info", a.displayInfo)
 	mux.HandleFunc("POST /v1/clock", a.displayClock)
@@ -200,6 +231,11 @@ func (a *API) currentInfo() Info {
 			system.Temperatures = []thermal.Temperature{}
 		}
 	}
+	var shutdownInfo *ShutdownInfo
+	if a.shutdownInfo != nil {
+		copyOfInfo := *a.shutdownInfo
+		shutdownInfo = &copyOfInfo
+	}
 	return Info{
 		ProtocolVersion: ProtocolVersion,
 		Width:           a.width,
@@ -212,7 +248,60 @@ func (a *API) currentInfo() Info {
 		UptimeSeconds:   int64(time.Since(a.startedAt).Seconds()),
 		Stats:           a.renderer.Stats(),
 		System:          system,
+		Shutdown:        shutdownInfo,
 	}
+}
+
+func (a *API) requestShutdown(w http.ResponseWriter, r *http.Request) {
+	if a.shutdown == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "shutdown unavailable", "remote shutdown is disabled")
+		return
+	}
+	// Requiring JSON also prevents a cross-site HTML form from shutting down
+	// a server on the local network. No cross-origin CORS access is enabled.
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		writeProblem(w, http.StatusUnsupportedMediaType, "unsupported media type", "Content-Type must be application/json")
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1024)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var request *ShutdownRequest
+	if err := decoder.Decode(&request); err != nil || request == nil {
+		writeProblem(w, http.StatusBadRequest, "invalid shutdown request", "body must contain one shutdown JSON object")
+		return
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		writeProblem(w, http.StatusBadRequest, "invalid shutdown request", "body must contain one shutdown JSON object")
+		return
+	}
+	if request.PowerOff && !a.shutdownInfo.PowerOff {
+		detail := a.shutdownInfo.PowerOffUnavailableReason
+		if detail == "" {
+			detail = "system power-off is not available on this server"
+		}
+		writeProblem(w, http.StatusServiceUnavailable, "power-off unavailable", detail)
+		return
+	}
+	a.shutdownMu.Lock()
+	defer a.shutdownMu.Unlock()
+	if a.shutdownRequest != nil {
+		if *request != *a.shutdownRequest {
+			writeProblem(w, http.StatusConflict, "shutdown already requested", "the shutdown mode cannot be changed once accepted")
+			return
+		}
+	} else {
+		if err := a.shutdown(r.Context(), *request); err != nil {
+			writeProblem(w, http.StatusServiceUnavailable, "shutdown unavailable", err.Error())
+			return
+		}
+		a.shutdownRequest = request
+	}
+	writeJSON(w, http.StatusAccepted, struct {
+		Status   string `json:"status"`
+		PowerOff bool   `json:"power_off"`
+	}{Status: "shutting_down", PowerOff: request.PowerOff})
 }
 
 // ShowTechnicalInfo queues the temporary information screen and restores the

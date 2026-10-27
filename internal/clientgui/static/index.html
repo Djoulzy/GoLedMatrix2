@@ -222,10 +222,14 @@
           <span class="panel-number">06</span>
           <div>
             <h2>Outils</h2>
-            <p>Diagnostic rapide du serveur et de sa connexion.</p>
+            <p>Diagnostic et arrêt propre du serveur.</p>
           </div>
         </div>
-        <button id="display-info" type="button" class="secondary">Afficher les informations techniques</button>
+        <div class="tool-actions">
+          <button id="display-info" type="button" class="secondary">Afficher les informations techniques</button>
+          <button id="shutdown" type="button" class="danger" aria-describedby="shutdown-hint" disabled>Arrêter le serveur</button>
+        </div>
+        <p id="shutdown-hint" class="form-hint">Connexion au serveur requise pour l’arrêt.</p>
       </section>
     </main>
 

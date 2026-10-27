@@ -1,0 +1,3 @@
+# The native matrix driver drops privileges to daemon. Permit only an orderly
+# system power-off, with fixed arguments; no shell, reboot or general sudo.
+daemon ALL=(root) NOPASSWD: /usr/bin/systemctl --no-ask-password poweroff

@@ -1,5 +1,5 @@
 BIN_DIR := bin
-RPI_HOST ?= led@192.168.0.107
+RPI_HOST ?= led@192.168.0.108
 RPI_CONFIG ?= config.toml
 RPI_SSH_PORT ?= 22
 RPI_HEALTH_URL ?= http://127.0.0.1:8080/healthz

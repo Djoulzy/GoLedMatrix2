@@ -299,10 +299,13 @@ type fakeMatrixClient struct {
 	info server.Info
 	sent frame.Frame
 
-	clockMode   string
-	clockColor1 string
-	clockColor2 string
-	marquee     marquee.Options
+	clockMode     string
+	clockColor1   string
+	clockColor2   string
+	marquee       marquee.Options
+	shutdownCalls int
+	powerOff      bool
+	shutdownErr   error
 
 	uploadName string
 	upload     animation.Bundle
@@ -320,6 +323,12 @@ func (f *fakeMatrixClient) Send(_ context.Context, next frame.Frame) (uint64, er
 
 func (f *fakeMatrixClient) DisplayInfo(context.Context) error {
 	return nil
+}
+
+func (f *fakeMatrixClient) Shutdown(_ context.Context, powerOff bool) error {
+	f.shutdownCalls++
+	f.powerOff = powerOff
+	return f.shutdownErr
 }
 
 func (f *fakeMatrixClient) DisplayClock(_ context.Context, mode, color1, color2 string) error {

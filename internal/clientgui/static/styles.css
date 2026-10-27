@@ -245,6 +245,9 @@ button {
 button:hover { filter: brightness(1.08); }
 button:disabled { cursor: wait; filter: grayscale(1); opacity: .55; }
 button.secondary { width: 100%; color: var(--accent); background: var(--accent-dark); }
+button.danger { width: 100%; border-color: var(--danger); color: var(--danger); background: #261311; }
+.tool-actions { display: grid; gap: 12px; }
+.tools-panel .form-hint { margin-top: 12px; }
 
 .color-pair, .form-grid {
   display: grid;
