@@ -138,7 +138,7 @@ sans boucle de rafraîchissement Go supplémentaire. Le simulateur et le backend
 mémoire modulent les composantes RGB en conservant la trame d'origine.
 
 ```bash
-./bin/ledmatrix-client -server http://192.168.0.18:7272 -brightness 35
+./bin/ledmatrix-client -no-gui -server http://192.168.0.18:7272 -brightness 35
 ```
 
 Le réglage est conservé jusqu'à la prochaine modification ou à l'arrêt du
@@ -169,7 +169,7 @@ trames client restent acceptées ; la plus récente est affichée automatiquemen
 Commande équivalente avec le client :
 
 ```bash
-go run ./cmd/ledmatrix-client \
+go run ./cmd/ledmatrix-client -no-gui \
   -server http://192.168.0.18:7272 \
   -show-info
 ```
@@ -193,7 +193,7 @@ visuels d’origine. Le rendu pixel-perfect reste réservé à l’écran techni
 Commande équivalente avec le client :
 
 ```bash
-go run ./cmd/ledmatrix-client \
+go run ./cmd/ledmatrix-client -no-gui \
   -server http://192.168.0.18:7272 \
   -clock round \
   -clock-color1 '#ff0000' \
@@ -245,18 +245,18 @@ période complète de `cycle_seconds` secondes (0,1 à 3600). La réponse est
 
 ```bash
 # Catalogue local complet, sans connexion au serveur
-./bin/ledmatrix-client -list-marquee-fonts
+./bin/ledmatrix-client -no-gui -list-marquee-fonts
 
-./bin/ledmatrix-client -server http://192.168.0.18:7272 \
+./bin/ledmatrix-client -no-gui -server http://192.168.0.18:7272 \
   -marquee 'Bonjour à tous !' \
   -marquee-font Flashback -marquee-size 20 \
   -marquee-color '#ff8337' -marquee-speed 40
 
-./bin/ledmatrix-client -server http://192.168.0.18:7272 \
+./bin/ledmatrix-client -no-gui -server http://192.168.0.18:7272 \
   -marquee 'Un texte arc-en-ciel' \
   -marquee-cycle rainbow -marquee-cycle-seconds 6
 
-./bin/ledmatrix-client -server http://192.168.0.18:7272 \
+./bin/ledmatrix-client -no-gui -server http://192.168.0.18:7272 \
   -marquee 'Une palette personnalisée' \
   -marquee-cycle '#ff8337,#7be0de,#ffffff' -marquee-cycle-seconds 4
 ```
@@ -269,7 +269,7 @@ leur cycle pendant les rebonds. La valeur par défaut `false` conserve le
 défilement en boucle de droite à gauche.
 
 ```bash
-./bin/ledmatrix-client -server http://192.168.0.107:7272 \
+./bin/ledmatrix-client -no-gui -server http://192.168.0.107:7272 \
   -marquee 'Bonjour !' -marquee-bounce -marquee-speed 30
 ```
 
@@ -288,7 +288,7 @@ une couleur fixe ou un cycle de couleurs. Dans la GUI, choisir « Trajectoire
 verticale → Sinusoïdale (haut / bas) » et régler la durée de l'aller-retour.
 
 ```bash
-./bin/ledmatrix-client -server http://192.168.0.107:7272 \
+./bin/ledmatrix-client -no-gui -server http://192.168.0.107:7272 \
   -marquee 'Bonjour !' -marquee-vertical-bounce \
   -marquee-vertical-bounce-seconds 4 -marquee-speed 30
 ```
@@ -309,7 +309,7 @@ Le client décode le GIF, applique transparence et modes de disposal, adapte
 l’image à la matrice en conservant son ratio, puis téléverse le résultat :
 
 ```bash
-go run ./cmd/ledmatrix-client \
+go run ./cmd/ledmatrix-client -no-gui \
   -server http://192.168.0.18:7272 \
   -gif animation.gif \
   -animation-name demo
@@ -323,7 +323,7 @@ conserve le comportement indiqué dans le GIF.
 Relance une animation déjà stockée, sans renvoyer le GIF ni les trames :
 
 ```bash
-go run ./cmd/ledmatrix-client \
+go run ./cmd/ledmatrix-client -no-gui \
   -server http://192.168.0.18:7272 \
   -play-animation demo
 ```
@@ -344,9 +344,9 @@ sous-réseaux IPv4 des interfaces actives (Ethernet, Wi-Fi, etc.), sans avoir à
 connaître leur adresse :
 
 ```bash
-go run ./cmd/ledmatrix-client -scan
+go run ./cmd/ledmatrix-client -no-gui -scan
 # Ou après make build-client :
-./bin/ledmatrix-client -scan
+./bin/ledmatrix-client -no-gui -scan
 ```
 
 Le résultat indique l'URL à utiliser avec `-server`, la géométrie logique de la
@@ -359,9 +359,9 @@ Le port sondé est **7272** par défaut. Pour un autre port ou pour limiter la
 recherche à un sous-réseau précis :
 
 ```bash
-./bin/ledmatrix-client -scan -scan-port 9090
-./bin/ledmatrix-client -scan -scan-network 192.168.0.0/24
-./bin/ledmatrix-client -scan -scan-timeout 1s -timeout 3m
+./bin/ledmatrix-client -no-gui -scan -scan-port 9090
+./bin/ledmatrix-client -no-gui -scan -scan-network 192.168.0.0/24
+./bin/ledmatrix-client -no-gui -scan -scan-timeout 1s -timeout 3m
 ```
 
 Le masque réel de chaque interface détermine le sous-réseau, sans supposer un
@@ -382,23 +382,53 @@ de sélectionner un sous-réseau plus petit avec `-scan-network`. Seuls les
 serveurs HTTP joignables sur le port choisi sont détectés : IPv6, HTTPS, les
 autres ports et les machines bloquées par un pare-feu ne sont pas couverts.
 Les proxys HTTP configurés dans l'environnement ne sont pas utilisés.
-`-scan` est une action autonome, à utiliser sans `-gui`, `-image`, `-clock` ou
-autre commande d'affichage ; `-server` n'intervient pas dans la découverte.
+`-scan` est une action autonome du mode `-no-gui`, à utiliser sans `-image`,
+`-clock` ou autre commande d'affichage ; `-server` n'intervient pas dans cette
+commande de découverte.
 
 ## Interface web du client
 
-Le mode GUI lance un panneau de contrôle web sur la machine du client. Il
-réutilise le client Go comme passerelle : le navigateur ne contacte jamais
-directement le Raspberry Pi et le protocole du serveur reste inchangé.
+Le client lance **par défaut** le panneau de contrôle web sur
+[http://127.0.0.1:8080](http://127.0.0.1:8080). L'option `-gui` est remplacée par
+`-no-gui`, qui active les commandes sans interface.
 
 ```bash
-go run ./cmd/ledmatrix-client \
-  -server http://192.168.0.18:7272 \
-  -gui
+# Interface web et découverte automatique des serveurs
+go run ./cmd/ledmatrix-client
+# Ou après make build-client :
+./bin/ledmatrix-client
+
+# Utiliser directement un serveur connu, sans scan au démarrage
+./bin/ledmatrix-client -server http://192.168.0.18:7272
+
+# Adapter la découverte au réseau ou à un port serveur différent
+./bin/ledmatrix-client -scan-network 192.168.0.0/24 -scan-port 7272
 ```
 
-Ouvrir ensuite [http://127.0.0.1:8090](http://127.0.0.1:8090). L’interface
-permet de :
+Sans `-server`, le client recherche les serveurs en arrière-plan dès son
+lancement. L'interface reste accessible pendant la recherche et affiche sa
+progression, les résultats ou une erreur explicite. Le premier résultat est
+sélectionné automatiquement. Le sélecteur « Serveur sélectionné » permet de
+passer d'une matrice à l'autre sans relancer le client. Chaque entrée indique
+l'adresse, le backend et la géométrie détectée ; un serveur accessible par
+plusieurs interfaces réseau peut donc avoir plusieurs entrées.
+
+Le bouton « Rechercher les serveurs » relance la découverte, y compris lorsqu'un
+serveur a été fourni avec `-server`. L'adresse fournie explicitement reste
+proposée. Une adresse déjà sélectionnée reste utilisable si un scan ultérieur
+ne la retrouve plus ; elle est alors indiquée comme non détectée. Le changement
+de serveur actualise les informations, les températures et la luminosité ; une
+modification de luminosité non appliquée est remise à la valeur du nouveau
+serveur. Les commandes sont désactivées tant qu'aucun serveur n'est joignable.
+
+Le choix est propre à chaque onglet du navigateur. Une commande en cours garde
+sa cible pendant toute son exécution ; le sélecteur est temporairement désactivé
+pendant les envois. Le navigateur contacte uniquement la passerelle Go locale,
+qui utilise les mêmes commandes HTTP et prétraitements que le client headless.
+Le serveur LED conserve son port par défaut **7272**, distinct du port de
+l'interface web locale **8080**.
+
+L'interface permet de :
 
 - consulter la connexion, la géométrie, le backend et les statistiques ;
 - consulter les températures internes du serveur, actualisées toutes les cinq
@@ -445,6 +475,24 @@ Par défaut, la GUI écoute uniquement sur la boucle locale. Une autre adresse
 peut être choisie avec `-gui-listen`, par exemple `127.0.0.1:9090`. Le projet
 n’ayant pas encore d’authentification, il est déconseillé de l’exposer avec
 `0.0.0.0` sur un réseau non maîtrisé.
+
+## Client sans interface
+
+Ajouter `-no-gui` pour exécuter une commande puis quitter :
+
+```bash
+./bin/ledmatrix-client -no-gui -server http://192.168.0.18:7272 -brightness 35
+./bin/ledmatrix-client -no-gui -server http://192.168.0.18:7272 -color '#2040ff'
+./bin/ledmatrix-client -no-gui -scan
+```
+
+Sans `-server`, les commandes d'affichage lancent aussi une découverte. Si une
+seule adresse est trouvée, elle est utilisée ; si plusieurs adresses sont
+trouvées, le client les liste et demande de choisir avec `-server`, sans envoyer
+de commande d'affichage. Un scan incomplet ou sans résultat ne sélectionne pas
+de cible. Les commandes locales `-scan` et `-list-marquee-fonts` restent autonomes.
+Les options `-scan-port`, `-scan-network`, `-scan-timeout` et `-timeout` règlent
+également cette découverte automatique.
 
 ## Configuration du serveur
 
@@ -637,11 +685,11 @@ appuyer sur `Échap` arrête proprement le serveur.
 Envoyer une couleur ou une image aux dimensions exactes :
 
 ```bash
-go run ./cmd/ledmatrix-client -server http://localhost:7272 -color '#2040ff'
-go run ./cmd/ledmatrix-client -server http://localhost:7272 -image frame.png
-go run ./cmd/ledmatrix-client -server http://localhost:7272 \
+go run ./cmd/ledmatrix-client -no-gui -server http://localhost:7272 -color '#2040ff'
+go run ./cmd/ledmatrix-client -no-gui -server http://localhost:7272 -image frame.png
+go run ./cmd/ledmatrix-client -no-gui -server http://localhost:7272 \
   -clock fancy -clock-color1 '#ff8337' -clock-color2 '#7be0de'
-go run ./cmd/ledmatrix-client -server http://localhost:7272 \
+go run ./cmd/ledmatrix-client -no-gui -server http://localhost:7272 \
   -gif animation.gif -animation-name demo
 ```
 
@@ -661,7 +709,7 @@ Si la fenêtre apparaît mais reste noire :
 4. demander à nouveau l’écran technique avec :
 
 ```bash
-go run ./cmd/ledmatrix-client \
+go run ./cmd/ledmatrix-client -no-gui \
   -server http://localhost:7272 \
   -show-info
 ```
@@ -835,7 +883,7 @@ Depuis le poste client, l'API est accessible avec :
 
 ```bash
 curl http://raspberrypi.local:7272/v1/info
-go run ./cmd/ledmatrix-client \
+go run ./cmd/ledmatrix-client -no-gui \
   -server http://raspberrypi.local:7272 \
   -color '#2040ff'
 ```

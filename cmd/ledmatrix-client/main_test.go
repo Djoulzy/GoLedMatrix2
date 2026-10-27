@@ -41,7 +41,7 @@ func TestBrightnessFlags(t *testing.T) {
 		{[]string{"-brightness", "35", "-scan"}, "provide exactly one", true},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		args := append([]string{"-test.run=^TestClientCLIHelper$", "--", "-server", api.URL}, tc.args...)
+		args := append([]string{"-test.run=^TestClientCLIHelper$", "--", "-no-gui", "-server", api.URL}, tc.args...)
 		command := exec.CommandContext(ctx, os.Args[0], args...)
 		command.Env = append(os.Environ(), "GOLEDMATRIX_CLIENT_CLI_TEST=1")
 		output, err := command.CombinedOutput()
@@ -89,7 +89,7 @@ func TestScanFlags(t *testing.T) {
 		{name: "no servers", args: []string{"-scan", "-scan-port", port, "-scan-network", host + "/32"}, mode: 1, want: "no GoLedMatrix2 servers found", probes: 1},
 		{name: "total deadline", args: []string{"-scan", "-scan-port", port, "-scan-network", host + "/32", "-scan-timeout", "1s", "-timeout", "50ms"}, mode: 2, want: "scan incomplete: context deadline exceeded", wantErr: true, probes: 1},
 		{name: "exclusive action", args: []string{"-scan", "-color", "#ffffff"}, want: "provide exactly one", wantErr: true},
-		{name: "modifier requires scan", args: []string{"-scan-port", port, "-color", "#ffffff"}, want: "-scan-port requires -scan", wantErr: true},
+		{name: "modifier requires scan", args: []string{"-scan-port", port, "-server", "http://unused.test:7272", "-color", "#ffffff"}, want: "-scan-port requires -scan", wantErr: true},
 		{name: "invalid port", args: []string{"-scan", "-scan-port", "65536"}, want: "-scan-port must be between 1 and 65535", wantErr: true},
 		{name: "zero port", args: []string{"-scan", "-scan-port", "0"}, want: "-scan-port must be between 1 and 65535", wantErr: true},
 		{name: "invalid prefix", args: []string{"-scan", "-scan-network", "192.168.0.1"}, want: "-scan-network must be an IPv4 CIDR prefix", wantErr: true},
@@ -103,7 +103,7 @@ func TestScanFlags(t *testing.T) {
 			requests.Store(0)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			args := append([]string{"-test.run=^TestClientCLIHelper$", "--"}, tc.args...)
+			args := append([]string{"-test.run=^TestClientCLIHelper$", "--", "-no-gui"}, tc.args...)
 			command := exec.CommandContext(ctx, os.Args[0], args...)
 			command.Env = append(os.Environ(), "GOLEDMATRIX_CLIENT_CLI_TEST=1")
 			output, err := command.CombinedOutput()
@@ -155,7 +155,7 @@ func TestMarqueeMotionFlags(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			args := []string{"-test.run=^TestClientCLIHelper$", "--", "-server", server.URL, "-marquee", "Bonjour"}
+			args := []string{"-test.run=^TestClientCLIHelper$", "--", "-no-gui", "-server", server.URL, "-marquee", "Bonjour"}
 			command := exec.CommandContext(ctx, os.Args[0], append(args, tc.flags...)...)
 			command.Env = append(os.Environ(), "GOLEDMATRIX_CLIENT_CLI_TEST=1")
 			output, err := command.CombinedOutput()

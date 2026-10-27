@@ -38,6 +38,8 @@ func New(rawURL string, timeout time.Duration) (*Client, error) {
 	return &Client{baseURL: baseURL, http: &http.Client{Timeout: timeout}}, nil
 }
 
+func (c *Client) ServerURL() string { return c.baseURL.String() }
+
 func (c *Client) Info(ctx context.Context) (server.Info, error) {
 	var info server.Info
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/v1/info"), nil)

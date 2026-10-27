@@ -7,6 +7,14 @@ const state = {
   brightnessDirty: false,
   brightnessSaving: false,
   brightnessRevision: 0,
+  serverURL: "",
+  serverRevision: 0,
+  serverReady: false,
+  serverCount: 0,
+  serverInventoryKey: "",
+  scanning: true,
+  scanRequested: false,
+  commands: 0,
 };
 
 function setActivity(message) {
@@ -22,20 +30,130 @@ function toast(message, error = false) {
 }
 
 async function request(path, options = {}) {
+  const matrixRequest = !["/api/servers", "/api/servers/scan", "/api/marquee/fonts"].includes(path);
+  const command = matrixRequest && options.method && options.method !== "GET";
+  const headers = new Headers(options.headers);
+  if (matrixRequest) {
+    if (!state.serverURL) throw new Error("Choisissez un serveur LED.");
+    headers.set("X-GoLedMatrix-Server", state.serverURL);
+  }
+  if (command) {
+    state.commands++;
+    updateServerControls();
+  }
   state.busy++;
   document.body.classList.add("busy");
   try {
-    const response = await fetch(path, options);
+    const response = await fetch(path, {...options, headers});
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(payload.detail || payload.error || `Erreur HTTP ${response.status}`);
     }
     return payload;
   } finally {
+    if (command) {
+      state.commands--;
+      updateServerControls();
+    }
     state.busy--;
     if (!state.busy) document.body.classList.remove("busy");
   }
 }
+
+function updateServerControls() {
+  $("#server-select").disabled = state.commands > 0 || state.serverCount === 0;
+  $("#rescan-servers").disabled = state.scanning || state.scanRequested;
+  $("#matrix-controls").disabled = !state.serverReady || state.commands > 0;
+}
+
+async function selectServer(url) {
+  if (url === state.serverURL) return;
+  state.serverURL = url;
+  state.serverRevision++;
+  state.serverReady = false;
+  state.geometry = null;
+  state.brightnessDirty = false;
+  state.brightnessRevision++;
+  for (const id of ["backend", "geometry", "format", "uptime"]) $("#" + id).textContent = "—";
+  $("#stats").textContent = "—";
+  $("#connection").className = "connection offline";
+  $("#connection-label").textContent = "Connexion…";
+  displayTemperatures(null, true);
+  displayBrightness(null);
+  $("#brightness-value").textContent = "—";
+  $("#brightness-status").textContent = "Connexion au serveur…";
+  updateServerControls();
+  setActivity(`Connexion à ${url}…`);
+  await refreshInfo(true);
+  if (state.serverURL === url && state.serverReady) setActivity(`Serveur sélectionné : ${url}`);
+}
+
+function displayServers(inventory) {
+  state.scanning = inventory.scanning;
+  const servers = [...inventory.servers];
+  if (state.serverURL && !servers.some((server) => server.url === state.serverURL)) {
+    servers.push({url: state.serverURL, missing: true});
+  }
+  state.serverCount = servers.length;
+  const select = $("#server-select");
+  const inventoryKey = JSON.stringify(servers);
+  if (inventoryKey !== state.serverInventoryKey) {
+    state.serverInventoryKey = inventoryKey;
+    select.replaceChildren();
+    for (const server of servers) {
+      const option = document.createElement("option");
+      option.value = server.url;
+      option.textContent = [server.url, server.backend, server.width && `${server.width} × ${server.height}`,
+        server.missing && "non détecté lors du dernier scan"].filter(Boolean).join(" · ");
+      select.append(option);
+    }
+  }
+  if (servers.length === 0) {
+    select.replaceChildren();
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = state.scanning ? "Recherche de serveurs…" : "Aucun serveur détecté";
+    select.append(option);
+    $("#connection-label").textContent = option.textContent;
+    $("#brightness-status").textContent = "Choisissez un serveur pour régler la luminosité.";
+  }
+  const selected = state.serverURL || inventory.initial_server || servers[0]?.url || "";
+  select.value = selected;
+  $("#discovery-status").textContent = state.scanning ? "Recherche de serveurs en cours…"
+    : inventory.error ? `Recherche incomplète : ${inventory.error}`
+    : inventory.servers.length ? `${inventory.servers.length} adresse(s) disponible(s). Choisissez le serveur à piloter.`
+    : "Aucun serveur détecté. Vérifiez le réseau et relancez la recherche.";
+  updateServerControls();
+  if (selected !== state.serverURL) void selectServer(selected);
+}
+
+async function pollServers() {
+  try {
+    displayServers(await request("/api/servers"));
+  } catch (error) {
+    $("#discovery-status").textContent = `Chargement des serveurs impossible : ${error.message}`;
+    state.scanning = false;
+    updateServerControls();
+  }
+  setTimeout(pollServers, state.scanning ? 1000 : 5000);
+}
+
+$("#server-select").addEventListener("change", (event) => {
+  void selectServer(event.target.value);
+});
+
+$("#rescan-servers").addEventListener("click", async () => {
+  state.scanRequested = true;
+  updateServerControls();
+  try {
+    displayServers(await request("/api/servers/scan", {method: "POST"}));
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    state.scanRequested = false;
+    updateServerControls();
+  }
+});
 
 function humanDuration(seconds) {
   const days = Math.floor(seconds / 86400);
@@ -65,9 +183,13 @@ function displayTemperatures(system, offline = false) {
 }
 
 async function refreshInfo(silent = false) {
+  if (!state.serverURL) return;
+  const serverRevision = state.serverRevision;
   const brightnessRevision = state.brightnessRevision;
   try {
     const info = await request("/api/info");
+    if (serverRevision !== state.serverRevision) return;
+    state.serverReady = true;
     state.geometry = {width: info.width, height: info.height};
     $("#connection").className = "connection online";
     $("#connection-label").textContent = "Serveur connecté";
@@ -82,14 +204,18 @@ async function refreshInfo(silent = false) {
     const accepted = info.stats?.accepted || 0;
     const rendered = info.stats?.rendered || 0;
     $("#stats").textContent = `${rendered} / ${accepted} trames rendues`;
+    updateServerControls();
     if (!silent) toast("État du serveur actualisé");
   } catch (error) {
+    if (serverRevision !== state.serverRevision) return;
+    state.serverReady = false;
     $("#connection").className = "connection offline";
     $("#connection-label").textContent = "Serveur hors ligne";
     displayTemperatures(null, true);
     if (brightnessRevision === state.brightnessRevision && !state.brightnessSaving) {
       displayBrightness(null, true);
     }
+    updateServerControls();
     if (!silent) toast(error.message, true);
   }
 }
@@ -280,7 +406,8 @@ bindForm("#play-form", async (form) => {
 });
 
 $("#display-info").addEventListener("click", async (event) => {
-  event.currentTarget.disabled = true;
+  const button = event.currentTarget;
+  button.disabled = true;
   try {
     setActivity("Demande d’affichage des informations…");
     await request("/api/display-info", {method: "POST"});
@@ -289,7 +416,7 @@ $("#display-info").addEventListener("click", async (event) => {
   } catch (error) {
     toast(error.message, true);
   } finally {
-    event.currentTarget.disabled = false;
+    button.disabled = false;
   }
 });
 
@@ -308,5 +435,5 @@ for (const [inputSelector, labelSelector] of [
   });
 }
 
-refreshInfo(true);
+pollServers();
 setInterval(() => refreshInfo(true), 5000);

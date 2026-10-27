@@ -19,6 +19,19 @@
       </div>
     </header>
 
+    <section class="server-card" aria-labelledby="server-heading">
+      <h2 id="server-heading">Serveur LED</h2>
+      <div class="server-controls">
+        <label>Serveur sélectionné
+          <select id="server-select" disabled>
+            <option value="">Recherche de serveurs…</option>
+          </select>
+        </label>
+        <button id="rescan-servers" type="button" disabled>Rechercher les serveurs</button>
+      </div>
+      <p id="discovery-status" class="form-hint" role="status">Chargement des serveurs…</p>
+    </section>
+
     <section class="matrix-card">
       <div>
         <span class="label">Serveur</span>
@@ -46,6 +59,7 @@
       <p id="temperature-status" role="status">Indisponible</p>
     </section>
 
+    <fieldset id="matrix-controls" aria-label="Commandes du serveur sélectionné" disabled>
     <section class="brightness-card" aria-labelledby="brightness-heading">
       <h2 id="brightness-heading">Luminosité</h2>
       <p>Ajustez l’intensité de l’affichage, de 1 à 100 %.</p>
@@ -243,6 +257,7 @@
         <button id="display-info" type="button" class="secondary">Afficher les informations techniques</button>
       </section>
     </main>
+    </fieldset>
 
     <footer>
       <span id="activity">Prêt.</span>
