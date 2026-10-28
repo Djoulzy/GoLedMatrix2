@@ -397,3 +397,7 @@ func (f *fakeMatrixClient) PlayAnimation(_ context.Context, name string) (animat
 	f.playName = name
 	return animation.Metadata{Name: name, FrameCount: 1, DurationMS: int64((50 * time.Millisecond).Milliseconds())}, nil
 }
+
+func (f *fakeMatrixClient) ListAnimations(context.Context) ([]string, error) {
+	return []string{}, nil
+}

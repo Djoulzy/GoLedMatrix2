@@ -172,10 +172,13 @@
         <div class="divider"><span>ou relancer</span></div>
         <form id="play-form" class="inline-form">
           <label class="grow">Animation stockée
-            <input name="name" type="text" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" placeholder="mon-animation" required>
+            <select id="animation-select" name="name" aria-describedby="animation-status" required disabled>
+              <option value="">Aucune animation disponible</option>
+            </select>
           </label>
-          <button type="submit">Lire</button>
+          <button type="submit" disabled>Lire</button>
         </form>
+        <p id="animation-status" class="form-hint" aria-live="polite">Choisissez un serveur pour afficher ses animations.</p>
       </section>
 
       <section class="panel marquee-panel">

@@ -339,6 +339,12 @@ Un nouveau marquee, une image/couleur, une animation ou l'horloge remplace le
 défilement actif. Une requête invalide conserve l'affichage en cours. L'écran
 technique est temporaire : le défilement continue et réapparaît à son expiration.
 
+### `GET /v1/animations`
+
+Retourne les noms des animations stockées sur le serveur, triés par ordre
+alphabétique, par exemple `["demo", "feu"]`. Un stockage vide retourne `[]`.
+La GUI utilise cette liste pour choisir une animation à relancer.
+
 ### `PUT /v1/animations/{name}`
 
 Stocke une animation prétraitée au format
@@ -496,7 +502,8 @@ L'interface permet de :
   arc-en-ciel ou palette personnalisée et durée du cycle ;
 - envoyer une couleur, une image PNG/JPEG/HEIC ou un GIF ;
 - prétraiter, nommer, stocker et lancer un GIF sur le Pi ;
-- relancer une animation persistante en saisissant son nom ;
+- relancer une animation persistante depuis la liste déroulante des animations
+  du serveur sélectionné, actualisée automatiquement après un import ;
 - demander l’affichage temporaire des informations techniques ;
 - éteindre proprement le Raspberry Pi, avec confirmation, depuis le panneau
   « Outils » (en mémoire/simulation, seul le serveur est arrêté).

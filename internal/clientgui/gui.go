@@ -36,6 +36,7 @@ type matrixClient interface {
 	DisplayClock(context.Context, string, string, string) error
 	DisplayMarquee(context.Context, marquee.Options) (marquee.Options, error)
 	UploadAnimation(context.Context, string, animation.Bundle, bool) (animation.Metadata, error)
+	ListAnimations(context.Context) ([]string, error)
 	PlayAnimation(context.Context, string) (animation.Metadata, error)
 }
 
@@ -78,6 +79,7 @@ func (gui *GUI) handler() http.Handler {
 	mux.HandleFunc("GET /api/marquee/fonts", marqueeFonts)
 	mux.HandleFunc("POST /api/display-info", gui.matrixHandler((*GUI).displayInfo))
 	mux.HandleFunc("POST /api/shutdown", gui.matrixHandler((*GUI).shutdown))
+	mux.HandleFunc("GET /api/animations", gui.matrixHandler((*GUI).listAnimations))
 	mux.HandleFunc("POST /api/animations", gui.matrixHandler((*GUI).uploadAnimation))
 	mux.HandleFunc("POST /api/animations/play", gui.matrixHandler((*GUI).playAnimation))
 	return securityHeaders(mux)
@@ -294,6 +296,15 @@ func (g *GUI) uploadAnimation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, metadata)
+}
+
+func (g *GUI) listAnimations(w http.ResponseWriter, r *http.Request) {
+	names, err := g.client.ListAnimations(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "Liste des animations indisponible", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, names)
 }
 
 func (g *GUI) playAnimation(w http.ResponseWriter, r *http.Request) {

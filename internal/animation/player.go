@@ -42,6 +42,10 @@ func (p *Player) Play(name string) (Metadata, error) {
 	return p.PlayReplacing(name, nil)
 }
 
+func (p *Player) List() ([]string, error) {
+	return p.store.List()
+}
+
 // PlayReplacing validates the stored animation before stopping another display
 // mode. The callback runs before any animation frame is submitted.
 func (p *Player) PlayReplacing(name string, stopPrevious func()) (Metadata, error) {

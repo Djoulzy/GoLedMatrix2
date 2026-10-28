@@ -242,6 +242,26 @@ func (c *Client) UploadAnimation(
 	return metadata, nil
 }
 
+func (c *Client) ListAnimations(ctx context.Context) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.endpoint("/v1/animations"), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, responseError(resp)
+	}
+	var names []string
+	if err := json.NewDecoder(resp.Body).Decode(&names); err != nil {
+		return nil, fmt.Errorf("decode animation list: %w", err)
+	}
+	return names, nil
+}
+
 func (c *Client) PlayAnimation(ctx context.Context, name string) (animation.Metadata, error) {
 	var metadata animation.Metadata
 	if err := animation.ValidateName(name); err != nil {

@@ -18,6 +18,8 @@ const state = {
   scanning: true,
   scanRequested: false,
   commands: 0,
+  animationNames: [],
+  animationRequestRevision: 0,
 };
 
 function setActivity(message) {
@@ -67,6 +69,9 @@ function updateServerControls() {
   $("#server-select").disabled = state.commands > 0 || state.serverCount === 0;
   $("#rescan-servers").disabled = state.scanning || state.scanRequested;
   $("#matrix-controls").disabled = !state.serverReady || state.commands > 0 || state.shuttingDown || state.controlsDisabled;
+  $("#animation-select").disabled = state.animationNames.length === 0;
+  $("#play-form button").disabled = state.animationNames.length === 0 || !state.serverReady
+    || state.commands > 0 || state.shuttingDown || state.controlsDisabled;
   updateShutdownButton();
 }
 
@@ -76,6 +81,7 @@ async function selectServer(url) {
   state.serverRevision++;
   state.serverReady = false;
   state.serverInfo = null;
+  displayAnimations([], "Chargement des animations…");
   state.shuttingDown = false;
   $("#refresh").disabled = false;
   state.geometry = null;
@@ -241,11 +247,14 @@ async function refreshInfo(silent = false) {
     $("#stats").textContent = `${rendered} / ${accepted} trames rendues`;
     if (state.controlsDisabled) disableServerControls(false);
     else updateServerControls();
+    void refreshAnimations();
     if (!silent) toast("État du serveur actualisé");
   } catch (error) {
     if (serverRevision !== state.serverRevision || state.shuttingDown) return;
     state.serverInfo = null;
     state.serverReady = false;
+    state.animationRequestRevision++;
+    displayAnimations([], "Liste indisponible — serveur hors ligne.");
     $("#connection").className = "connection offline";
     $("#connection-label").textContent = "Serveur hors ligne";
     displayTemperatures(null, true);
@@ -254,6 +263,53 @@ async function refreshInfo(silent = false) {
     }
     updateServerControls();
     if (!silent) toast(error.message, true);
+  }
+}
+
+function displayAnimations(names, message, preferredName = $("#animation-select").value) {
+  const select = $("#animation-select");
+  const changed = names.length !== state.animationNames.length
+    || names.some((name, index) => name !== state.animationNames[index]);
+  state.animationNames = names;
+  if (changed) {
+    select.replaceChildren();
+    if (names.length === 0) {
+      const option = document.createElement("option");
+      option.value = "";
+      option.textContent = "Aucune animation disponible";
+      select.append(option);
+    } else {
+      for (const name of names) {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        select.append(option);
+      }
+    }
+  }
+  if (names.length > 0) {
+    select.value = names.includes(preferredName) ? preferredName : names[0];
+  }
+  $("#animation-status").textContent = message;
+  updateServerControls();
+}
+
+async function refreshAnimations(preferredName) {
+  if (!state.serverReady || state.shuttingDown) return;
+  const serverRevision = state.serverRevision;
+  const requestRevision = ++state.animationRequestRevision;
+  try {
+    const names = await request("/api/animations");
+    if (serverRevision !== state.serverRevision || requestRevision !== state.animationRequestRevision || state.shuttingDown) return;
+    if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) {
+      throw new Error("Liste des animations invalide.");
+    }
+    const message = names.length === 0 ? "Aucune animation importée sur ce serveur."
+      : `${names.length} animation(s) disponible(s) sur ce serveur.`;
+    displayAnimations(names, message, preferredName);
+  } catch (error) {
+    if (serverRevision !== state.serverRevision || requestRevision !== state.animationRequestRevision || state.shuttingDown) return;
+    displayAnimations([], `Chargement des animations impossible : ${error.message}`);
   }
 }
 
@@ -323,6 +379,7 @@ function bindForm(selector, action) {
       toast(error.message, true);
     } finally {
       button.disabled = state.shuttingDown || state.controlsDisabled;
+      updateServerControls();
     }
   });
 }
@@ -434,6 +491,7 @@ bindForm("#gif-form", async (form) => {
   const metadata = await request("/api/animations", {method: "POST", body: form});
   setActivity(`Animation ${metadata.name} en lecture — ${metadata.frame_count} images.`);
   toast(`Animation « ${metadata.name} » stockée et lancée`);
+  await refreshAnimations(metadata.name);
 });
 
 bindForm("#play-form", async (form) => {

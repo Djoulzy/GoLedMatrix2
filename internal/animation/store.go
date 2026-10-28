@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
@@ -77,6 +78,27 @@ func (s *Store) Load(name string) (Bundle, error) {
 		return Bundle{}, err
 	}
 	return s.LoadPath(s.path(name))
+}
+
+// List returns stored animation names in alphabetical order. Reading only the
+// directory keeps catalogue refreshes independent of animation size and avoids
+// loading RGB24 frames while another animation is playing.
+func (s *Store) List() ([]string, error) {
+	entries, err := os.ReadDir(s.directory)
+	if err != nil {
+		return nil, fmt.Errorf("list animations: %w", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !strings.HasSuffix(entry.Name(), ".glma") {
+			continue
+		}
+		name := strings.TrimSuffix(entry.Name(), ".glma")
+		if ValidateName(name) == nil {
+			names = append(names, name)
+		}
+	}
+	return names, nil
 }
 
 func (s *Store) LoadPath(path string) (Bundle, error) {

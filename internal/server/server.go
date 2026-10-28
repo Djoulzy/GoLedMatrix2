@@ -211,6 +211,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/display-info", a.displayInfo)
 	mux.HandleFunc("POST /v1/clock", a.displayClock)
 	mux.HandleFunc("POST /v1/marquee", a.displayMarquee)
+	mux.HandleFunc("GET /v1/animations", a.listAnimations)
 	mux.HandleFunc("PUT /v1/animations/{name}", a.putAnimation)
 	mux.HandleFunc("POST /v1/animations/{name}/play", a.playAnimation)
 	return mux
@@ -467,6 +468,20 @@ func (a *API) putFrame(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, struct {
 		Sequence uint64 `json:"sequence"`
 	}{Sequence: sequence})
+}
+
+func (a *API) listAnimations(w http.ResponseWriter, _ *http.Request) {
+	if a.animations == nil {
+		writeProblem(w, http.StatusServiceUnavailable, "animations unavailable", "animation storage is disabled")
+		return
+	}
+	names, err := a.animations.List()
+	if err != nil {
+		writeProblem(w, http.StatusInternalServerError, "unable to list animations", err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, names)
 }
 
 func (a *API) putAnimation(w http.ResponseWriter, r *http.Request) {
