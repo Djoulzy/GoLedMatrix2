@@ -19,6 +19,7 @@ import (
 	"github.com/Djoulzy/GoLedMatrix2/internal/client"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 	"github.com/Djoulzy/GoLedMatrix2/internal/marquee"
+	"github.com/Djoulzy/GoLedMatrix2/internal/photo"
 	"github.com/Djoulzy/GoLedMatrix2/internal/server"
 )
 
@@ -31,6 +32,9 @@ type matrixClient interface {
 	Info(context.Context) (server.Info, error)
 	SetBrightness(context.Context, int) (server.BrightnessState, error)
 	Send(context.Context, frame.Frame) (uint64, error)
+	UploadPhoto(context.Context, string, frame.Frame, bool) (photo.Metadata, error)
+	ListPhotos(context.Context) ([]string, error)
+	DisplayPhoto(context.Context, string) (photo.Metadata, error)
 	DisplayInfo(context.Context) error
 	Shutdown(context.Context, bool) error
 	DisplayClock(context.Context, string, string, string) error
@@ -74,6 +78,8 @@ func (gui *GUI) handler() http.Handler {
 	mux.HandleFunc("POST /api/brightness", gui.matrixHandler((*GUI).brightness))
 	mux.HandleFunc("POST /api/color", gui.matrixHandler((*GUI).color))
 	mux.HandleFunc("POST /api/image", gui.matrixHandler((*GUI).image))
+	mux.HandleFunc("GET /api/photos", gui.matrixHandler((*GUI).listPhotos))
+	mux.HandleFunc("POST /api/photos/display", gui.matrixHandler((*GUI).displayPhoto))
 	mux.HandleFunc("POST /api/clock", gui.matrixHandler((*GUI).clock))
 	mux.HandleFunc("POST /api/marquee", gui.matrixHandler((*GUI).marquee))
 	mux.HandleFunc("GET /api/marquee/fonts", marqueeFonts)
@@ -154,7 +160,7 @@ func (g *GUI) color(w http.ResponseWriter, r *http.Request) {
 
 func (g *GUI) image(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBrowserUpload)
-	file, _, err := r.FormFile("file")
+	file, header, err := r.FormFile("file")
 	if err != nil {
 		writeMultipartError(w, "Image absente ou trop volumineuse", err)
 		return
@@ -162,6 +168,14 @@ func (g *GUI) image(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 	if r.MultipartForm != nil {
 		defer r.MultipartForm.RemoveAll()
+	}
+	name := strings.TrimSpace(r.FormValue("name"))
+	if name == "" {
+		name = defaultPhotoName(header.Filename)
+	}
+	if err := photo.ValidateName(name); err != nil {
+		writeError(w, http.StatusBadRequest, "Nom de photo invalide", err)
+		return
 	}
 	info, err := g.client.Info(r.Context())
 	if err != nil {
@@ -177,12 +191,12 @@ func (g *GUI) image(w http.ResponseWriter, r *http.Request) {
 		writeError(w, status, "Préparation de l’image PNG, JPEG ou HEIC impossible", err)
 		return
 	}
-	sequence, err := g.client.Send(r.Context(), next)
+	metadata, err := g.client.UploadPhoto(r.Context(), name, next, true)
 	if err != nil {
-		writeError(w, http.StatusBadGateway, "Envoi de l’image impossible", err)
+		writeError(w, http.StatusBadGateway, "Stockage de la photo impossible", err)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"sequence": sequence})
+	writeJSON(w, http.StatusCreated, metadata)
 }
 
 func (g *GUI) clock(w http.ResponseWriter, r *http.Request) {

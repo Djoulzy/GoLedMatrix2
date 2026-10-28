@@ -18,8 +18,19 @@ const state = {
   scanning: true,
   scanRequested: false,
   commands: 0,
-  animationNames: [],
-  animationRequestRevision: 0,
+};
+
+const catalogues = {
+  animations: {
+    select: "#animation-select", form: "#play-form", status: "#animation-status",
+    label: "animation", plural: "animations", empty: "Aucune animation disponible",
+    names: [], revision: 0,
+  },
+  photos: {
+    select: "#photo-select", form: "#photo-display-form", status: "#photo-status",
+    label: "photo", plural: "photos", empty: "Aucune photo disponible",
+    names: [], revision: 0,
+  },
 };
 
 function setActivity(message) {
@@ -69,9 +80,11 @@ function updateServerControls() {
   $("#server-select").disabled = state.commands > 0 || state.serverCount === 0;
   $("#rescan-servers").disabled = state.scanning || state.scanRequested;
   $("#matrix-controls").disabled = !state.serverReady || state.commands > 0 || state.shuttingDown || state.controlsDisabled;
-  $("#animation-select").disabled = state.animationNames.length === 0;
-  $("#play-form button").disabled = state.animationNames.length === 0 || !state.serverReady
-    || state.commands > 0 || state.shuttingDown || state.controlsDisabled;
+  for (const catalogue of Object.values(catalogues)) {
+    $(catalogue.select).disabled = catalogue.names.length === 0;
+    $(catalogue.form + " button").disabled = catalogue.names.length === 0 || !state.serverReady
+      || state.commands > 0 || state.shuttingDown || state.controlsDisabled;
+  }
   updateShutdownButton();
 }
 
@@ -81,7 +94,9 @@ async function selectServer(url) {
   state.serverRevision++;
   state.serverReady = false;
   state.serverInfo = null;
-  displayAnimations([], "Chargement des animations…");
+  for (const kind of Object.keys(catalogues)) {
+    displayCatalogue(kind, [], `Chargement des ${catalogues[kind].plural}…`);
+  }
   state.shuttingDown = false;
   $("#refresh").disabled = false;
   state.geometry = null;
@@ -247,14 +262,16 @@ async function refreshInfo(silent = false) {
     $("#stats").textContent = `${rendered} / ${accepted} trames rendues`;
     if (state.controlsDisabled) disableServerControls(false);
     else updateServerControls();
-    void refreshAnimations();
+    for (const kind of Object.keys(catalogues)) void refreshCatalogue(kind);
     if (!silent) toast("État du serveur actualisé");
   } catch (error) {
     if (serverRevision !== state.serverRevision || state.shuttingDown) return;
     state.serverInfo = null;
     state.serverReady = false;
-    state.animationRequestRevision++;
-    displayAnimations([], "Liste indisponible — serveur hors ligne.");
+    for (const kind of Object.keys(catalogues)) {
+      catalogues[kind].revision++;
+      displayCatalogue(kind, [], "Liste indisponible — serveur hors ligne.");
+    }
     $("#connection").className = "connection offline";
     $("#connection-label").textContent = "Serveur hors ligne";
     displayTemperatures(null, true);
@@ -266,17 +283,19 @@ async function refreshInfo(silent = false) {
   }
 }
 
-function displayAnimations(names, message, preferredName = $("#animation-select").value) {
-  const select = $("#animation-select");
-  const changed = names.length !== state.animationNames.length
-    || names.some((name, index) => name !== state.animationNames[index]);
-  state.animationNames = names;
+function displayCatalogue(kind, names, message, preferredName) {
+  const catalogue = catalogues[kind];
+  const select = $(catalogue.select);
+  preferredName ??= select.value;
+  const changed = names.length !== catalogue.names.length
+    || names.some((name, index) => name !== catalogue.names[index]);
+  catalogue.names = names;
   if (changed) {
     select.replaceChildren();
     if (names.length === 0) {
       const option = document.createElement("option");
       option.value = "";
-      option.textContent = "Aucune animation disponible";
+      option.textContent = catalogue.empty;
       select.append(option);
     } else {
       for (const name of names) {
@@ -290,26 +309,27 @@ function displayAnimations(names, message, preferredName = $("#animation-select"
   if (names.length > 0) {
     select.value = names.includes(preferredName) ? preferredName : names[0];
   }
-  $("#animation-status").textContent = message;
+  $(catalogue.status).textContent = message;
   updateServerControls();
 }
 
-async function refreshAnimations(preferredName) {
+async function refreshCatalogue(kind, preferredName) {
   if (!state.serverReady || state.shuttingDown) return;
+  const catalogue = catalogues[kind];
   const serverRevision = state.serverRevision;
-  const requestRevision = ++state.animationRequestRevision;
+  const requestRevision = ++catalogue.revision;
   try {
-    const names = await request("/api/animations");
-    if (serverRevision !== state.serverRevision || requestRevision !== state.animationRequestRevision || state.shuttingDown) return;
+    const names = await request(`/api/${kind}`);
+    if (serverRevision !== state.serverRevision || requestRevision !== catalogue.revision || state.shuttingDown) return;
     if (!Array.isArray(names) || !names.every((name) => typeof name === "string")) {
-      throw new Error("Liste des animations invalide.");
+      throw new Error(`Liste des ${catalogue.plural} invalide.`);
     }
-    const message = names.length === 0 ? "Aucune animation importée sur ce serveur."
-      : `${names.length} animation(s) disponible(s) sur ce serveur.`;
-    displayAnimations(names, message, preferredName);
+    const message = names.length === 0 ? `Aucune ${catalogue.label} importée sur ce serveur.`
+      : `${names.length} ${catalogue.label}(s) disponible(s) sur ce serveur.`;
+    displayCatalogue(kind, names, message, preferredName);
   } catch (error) {
-    if (serverRevision !== state.serverRevision || requestRevision !== state.animationRequestRevision || state.shuttingDown) return;
-    displayAnimations([], `Chargement des animations impossible : ${error.message}`);
+    if (serverRevision !== state.serverRevision || requestRevision !== catalogue.revision || state.shuttingDown) return;
+    displayCatalogue(kind, [], `Chargement des ${catalogue.plural} impossible : ${error.message}`);
   }
 }
 
@@ -481,9 +501,18 @@ bindForm("#color-form", async (form) => {
 
 bindForm("#image-form", async (form) => {
   setActivity("Préparation de l’image : redimensionnement et recadrage centré…");
-  await request("/api/image", {method: "POST", body: form});
-  setActivity("Image affichée.");
-  toast("Image affichée");
+  const metadata = await request("/api/image", {method: "POST", body: form});
+  setActivity(`Photo ${metadata.name} stockée et affichée.`);
+  toast(`Photo « ${metadata.name} » stockée et affichée`);
+  await refreshCatalogue("photos", metadata.name);
+});
+
+bindForm("#photo-display-form", async (form) => {
+  const name = form.get("name");
+  setActivity(`Affichage de la photo ${name}…`);
+  const metadata = await request("/api/photos/display", jsonOptions({name}));
+  setActivity(`Photo ${metadata.name} affichée.`);
+  toast(`Photo « ${metadata.name} » affichée`);
 });
 
 bindForm("#gif-form", async (form) => {
@@ -491,7 +520,7 @@ bindForm("#gif-form", async (form) => {
   const metadata = await request("/api/animations", {method: "POST", body: form});
   setActivity(`Animation ${metadata.name} en lecture — ${metadata.frame_count} images.`);
   toast(`Animation « ${metadata.name} » stockée et lancée`);
-  await refreshAnimations(metadata.name);
+  await refreshCatalogue("animations", metadata.name);
 });
 
 bindForm("#play-form", async (form) => {

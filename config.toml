@@ -38,3 +38,6 @@ Color2                  = ""
 [Animations]
 Directory               = "animations"
 MaxUploadMB             = 128
+
+[Photos]
+Directory               = "photos"

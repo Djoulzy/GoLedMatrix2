@@ -19,6 +19,7 @@ import (
 	"github.com/Djoulzy/GoLedMatrix2/internal/animation"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 	"github.com/Djoulzy/GoLedMatrix2/internal/marquee"
+	"github.com/Djoulzy/GoLedMatrix2/internal/photo"
 	"github.com/Djoulzy/GoLedMatrix2/internal/server"
 	"github.com/Djoulzy/GoLedMatrix2/internal/thermal"
 )
@@ -221,8 +222,11 @@ func TestImageUpload(t *testing.T) {
 
 	handler.ServeHTTP(response, request)
 
-	if response.Code != http.StatusAccepted {
+	if response.Code != http.StatusCreated {
 		t.Fatalf("image response = %d %q", response.Code, response.Body.String())
+	}
+	if matrix.photoName != "frame" {
+		t.Fatalf("stored photo name = %q", matrix.photoName)
 	}
 	if !bytes.Equal(matrix.sent.Pixels, []byte{1, 2, 3, 4, 5, 6}) {
 		t.Fatalf("image pixels = %v", matrix.sent.Pixels)
@@ -244,7 +248,7 @@ func TestImageUploadResizesAndCropsCenter(t *testing.T) {
 	request.Header.Set("Content-Type", contentType)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusAccepted || matrix.sent.Width != 2 || matrix.sent.Height != 1 || !bytes.Equal(matrix.sent.Pixels, []byte{0, 255, 0, 0, 255, 0}) {
+	if response.Code != http.StatusCreated || matrix.sent.Width != 2 || matrix.sent.Height != 1 || !bytes.Equal(matrix.sent.Pixels, []byte{0, 255, 0, 0, 255, 0}) {
 		t.Fatalf("resized image response = %d %s, frame %+v", response.Code, response.Body, matrix.sent)
 	}
 }
@@ -344,6 +348,7 @@ type fakeMatrixClient struct {
 	uploadName string
 	upload     animation.Bundle
 	playName   string
+	photoName  string
 }
 
 func (f *fakeMatrixClient) SetBrightness(_ context.Context, value int) (server.BrightnessState, error) {
@@ -400,4 +405,18 @@ func (f *fakeMatrixClient) PlayAnimation(_ context.Context, name string) (animat
 
 func (f *fakeMatrixClient) ListAnimations(context.Context) ([]string, error) {
 	return []string{}, nil
+}
+
+func (f *fakeMatrixClient) UploadPhoto(_ context.Context, name string, next frame.Frame, _ bool) (photo.Metadata, error) {
+	f.photoName, f.sent = name, next
+	return photo.Metadata{Name: name, Width: next.Width, Height: next.Height}, nil
+}
+
+func (f *fakeMatrixClient) ListPhotos(context.Context) ([]string, error) {
+	return []string{}, nil
+}
+
+func (f *fakeMatrixClient) DisplayPhoto(_ context.Context, name string) (photo.Metadata, error) {
+	f.photoName = name
+	return photo.Metadata{Name: name, Width: f.info.Width, Height: f.info.Height}, nil
 }

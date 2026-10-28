@@ -30,6 +30,8 @@ Fondations disponibles :
   active ;
 - prétraitement des GIF côté client, stockage persistant des trames RGB24 sur
   le Pi et lecture autonome temporisée ;
+- stockage persistant des photos préparées côté client et réaffichage depuis
+  une liste déroulante dans la GUI ;
 - configuration TOML stricte du matériel, du runtime GPIO et du serveur HTTP ;
 - arrêt propre, limites de taille, timeouts HTTP et tests avec race detector ;
 - dépendances Go et bibliothèque C++ épinglées.
@@ -339,6 +341,31 @@ Un nouveau marquee, une image/couleur, une animation ou l'horloge remplace le
 défilement actif. Une requête invalide conserve l'affichage en cours. L'écran
 technique est temporaire : le défilement continue et réapparaît à son expiration.
 
+### `GET /v1/photos`
+
+Retourne les noms des photos stockées, triés par ordre alphabétique, par exemple
+`["famille", "paysage"]`. Un stockage vide retourne `[]`.
+
+### `PUT /v1/photos/{name}`
+
+Stocke une photo préparée aux dimensions exactes de la matrice, puis l'affiche.
+Le corps est une trame RGB24, avec le même `Content-Type` et les mêmes limites
+de taille que `PUT /v1/frame`. La réponse est `201 Created`, par exemple
+`{"name":"famille","width":128,"height":128}`. `?display=false` permet de
+stocker sans modifier l'affichage en cours.
+
+Le nom accepte de 1 à 64 lettres/chiffres ASCII, tirets et underscores, avec
+une lettre ou un chiffre en premier. Un import portant un nom existant remplace
+atomiquement la photo correspondante. Une requête invalide conserve le fichier
+précédent et l'affichage en cours.
+
+### `POST /v1/photos/{name}/display`
+
+Réaffiche une photo persistante sans renvoyer le fichier source depuis le client.
+La réponse est `202 Accepted` avec le nom et les dimensions. La photo remplace
+l'horloge, le texte défilant ou l'animation en cours. Les fichiers restent
+disponibles après redémarrage du serveur ; leur réaffichage est explicite.
+
 ### `GET /v1/animations`
 
 Retourne les noms des animations stockées sur le serveur, triés par ordre
@@ -501,6 +528,8 @@ L'interface permet de :
   verticale sinusoïdale optionnelle, police, taille, vitesse, couleur fixe,
   arc-en-ciel ou palette personnalisée et durée du cycle ;
 - envoyer une couleur, une image PNG/JPEG/HEIC ou un GIF ;
+- nommer, stocker et afficher une photo sur le serveur, puis la réafficher
+  depuis la liste déroulante des photos du serveur sélectionné ;
 - prétraiter, nommer, stocker et lancer un GIF sur le Pi ;
 - relancer une animation persistante depuis la liste déroulante des animations
   du serveur sélectionné, actualisée automatiquement après un import ;
@@ -531,6 +560,13 @@ L'excédent est coupé symétriquement sur les côtés ou en haut et en bas : au
 déformation ni bande ajoutée. Les PNG transparents sont composés sur fond noir.
 Le client accepte PNG, JPEG et HEIC/HEIF et limite les images décodées à
 64 mégapixels. L'option CLI `-image` conserve son exigence de dimensions exactes.
+
+La GUI conserve sur le serveur la version RGB24 adaptée à la matrice. Dans le
+panneau « Photos », le nom de stockage est facultatif : il est dérivé du nom
+du fichier, sans extension, avec remplacement des caractères incompatibles par
+des tirets. La liste des photos est actualisée après chaque import et lors du
+changement de serveur, et conserve le choix courant lors des actualisations.
+Choisir une photo puis « Afficher » suffit à la recharger depuis le Pi.
 
 Le HEIC est converti localement en PNG avant ce traitement : sur macOS, le
 client utilise `sips`, fourni avec le système. Sur les autres plateformes,
@@ -622,6 +658,9 @@ Color2                  = ""
 [Animations]
 Directory               = "animations"
 MaxUploadMB             = 128
+
+[Photos]
+Directory               = "photos"
 ```
 
 Les valeurs sont appliquées dans cet ordre :
@@ -647,6 +686,12 @@ ponctuellement. `Clock.Color1` et `Clock.Color2` acceptent des couleurs
 `Animations.MaxUploadMB` borne la taille compressée d’un téléversement. Avec le
 service `systemd` fourni, le répertoire relatif `animations` se trouve dans
 `/var/lib/goledmatrix2/animations`.
+
+`Photos.Directory` définit le répertoire des fichiers `.glmp`, contenant les
+dimensions et les pixels RGB24 des photos préparées par le client. La valeur
+par défaut est `photos`, soit `/var/lib/goledmatrix2/photos` avec le service
+`systemd` fourni. Le serveur crée ce répertoire automatiquement et ne décode
+aucun PNG, JPEG ou HEIC pour réafficher une photo.
 
 `Addr = "detect"` écoute sur toutes les interfaces (`:Port`). Une adresse IP ou
 un nom d’hôte peut être donné pour restreindre l’écoute. `Enabled = false`

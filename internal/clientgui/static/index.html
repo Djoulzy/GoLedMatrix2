@@ -125,7 +125,7 @@
         <div class="panel-heading">
           <span class="panel-number">03</span>
           <div>
-            <h2>Image</h2>
+            <h2>Photos</h2>
             <p>PNG, JPEG ou HEIC. Proportions conservées, recadrage centré pour remplir la matrice.</p>
           </div>
         </div>
@@ -135,8 +135,22 @@
             <span class="drop-title">Choisir une image</span>
             <span id="image-file" class="drop-detail">Aucun fichier sélectionné</span>
           </label>
-          <button type="submit">Afficher l’image</button>
+          <label>Nom de stockage (facultatif)
+            <input name="name" type="text" pattern="[A-Za-z0-9][A-Za-z0-9_-]{0,63}" maxlength="64" placeholder="Nom du fichier par défaut">
+          </label>
+          <p class="form-hint">Lettres, chiffres, tirets et _. Un nom existant remplace la photo correspondante.</p>
+          <button type="submit">Stocker et afficher la photo</button>
         </form>
+        <div class="divider"><span>ou réafficher</span></div>
+        <form id="photo-display-form" class="inline-form">
+          <label class="grow">Photo stockée
+            <select id="photo-select" name="name" aria-describedby="photo-status" required disabled>
+              <option value="">Aucune photo disponible</option>
+            </select>
+          </label>
+          <button type="submit" disabled>Afficher</button>
+        </form>
+        <p id="photo-status" class="form-hint" aria-live="polite">Choisissez un serveur pour afficher ses photos.</p>
       </section>
 
       <section class="panel animation-panel">

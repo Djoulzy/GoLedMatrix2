@@ -18,6 +18,7 @@ type Config struct {
 	HTTP      HTTPServer      `toml:"HTTPserver"`
 	Clock     ClockConfig     `toml:"Clock"`
 	Animation AnimationConfig `toml:"Animations"`
+	Photo     PhotoConfig     `toml:"Photos"`
 }
 
 type HardwareConfig struct {
@@ -66,6 +67,10 @@ type AnimationConfig struct {
 	MaxUploadMB int64  `toml:"MaxUploadMB"`
 }
 
+type PhotoConfig struct {
+	Directory string `toml:"Directory"`
+}
+
 func Default() Config {
 	return Config{
 		Hardware: HardwareConfig{
@@ -79,6 +84,7 @@ func Default() Config {
 		HTTP:      HTTPServer{Addr: "detect", Port: 7272, Enabled: true, InfoDisplaySeconds: 5},
 		Clock:     ClockConfig{DefaultMode: string(matrixclock.Simple)},
 		Animation: AnimationConfig{Directory: "animations", MaxUploadMB: 128},
+		Photo:     PhotoConfig{Directory: "photos"},
 	}
 }
 
@@ -162,6 +168,9 @@ func (c Config) Validate() error {
 	}
 	if c.Animation.MaxUploadMB < 1 || c.Animation.MaxUploadMB > 1024 {
 		return errors.New("Animations.MaxUploadMB must be between 1 and 1024")
+	}
+	if strings.TrimSpace(c.Photo.Directory) == "" {
+		return errors.New("Photos.Directory must not be empty")
 	}
 	return nil
 }

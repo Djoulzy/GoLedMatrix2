@@ -15,6 +15,7 @@ import (
 	"github.com/Djoulzy/GoLedMatrix2/internal/animation"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 	"github.com/Djoulzy/GoLedMatrix2/internal/marquee"
+	"github.com/Djoulzy/GoLedMatrix2/internal/photo"
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
 	"github.com/Djoulzy/GoLedMatrix2/internal/thermal"
 )
@@ -40,6 +41,7 @@ type API struct {
 	technicalDuration time.Duration
 	clockDisplay      func(ClockSelection) (ClockState, error)
 	animations        *animation.Player
+	photos            *photo.Store
 	maxAnimationBytes int64
 	marquee           *marquee.Player
 	displayMu         sync.Mutex
@@ -211,6 +213,9 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/display-info", a.displayInfo)
 	mux.HandleFunc("POST /v1/clock", a.displayClock)
 	mux.HandleFunc("POST /v1/marquee", a.displayMarquee)
+	mux.HandleFunc("GET /v1/photos", a.listPhotos)
+	mux.HandleFunc("PUT /v1/photos/{name}", a.putPhoto)
+	mux.HandleFunc("POST /v1/photos/{name}/display", a.displayPhoto)
 	mux.HandleFunc("GET /v1/animations", a.listAnimations)
 	mux.HandleFunc("PUT /v1/animations/{name}", a.putAnimation)
 	mux.HandleFunc("POST /v1/animations/{name}/play", a.playAnimation)
@@ -434,28 +439,43 @@ func (a *API) displayMarquee(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) putFrame(w http.ResponseWriter, r *http.Request) {
+	next, ok := a.readFrame(w, r)
+	if !ok {
+		return
+	}
+	sequence := a.submitFrame(next)
+	writeJSON(w, http.StatusAccepted, struct {
+		Sequence uint64 `json:"sequence"`
+	}{Sequence: sequence})
+}
+
+func (a *API) readFrame(w http.ResponseWriter, r *http.Request) (frame.Frame, bool) {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != frame.MediaType {
 		writeProblem(w, http.StatusUnsupportedMediaType, "unsupported media type",
 			fmt.Sprintf("Content-Type must be %s", frame.MediaType))
-		return
+		return frame.Frame{}, false
 	}
 	if r.ContentLength >= 0 && r.ContentLength != int64(a.frameSize) {
 		writeProblem(w, http.StatusBadRequest, "invalid frame size",
 			fmt.Sprintf("body has %d bytes; expected %d", r.ContentLength, a.frameSize))
-		return
+		return frame.Frame{}, false
 	}
 
 	payload, err := io.ReadAll(io.LimitReader(r.Body, int64(a.frameSize)+1))
 	if err != nil {
 		writeProblem(w, http.StatusBadRequest, "unable to read frame", err.Error())
-		return
+		return frame.Frame{}, false
 	}
 	next, err := frame.New(a.width, a.height, payload)
 	if err != nil {
 		writeProblem(w, http.StatusBadRequest, "invalid frame", err.Error())
-		return
+		return frame.Frame{}, false
 	}
+	return next, true
+}
+
+func (a *API) submitFrame(next frame.Frame) uint64 {
 	a.displayMu.Lock()
 	defer a.displayMu.Unlock()
 	if a.marquee != nil {
@@ -464,10 +484,7 @@ func (a *API) putFrame(w http.ResponseWriter, r *http.Request) {
 	if a.animations != nil {
 		a.animations.Stop()
 	}
-	sequence := a.renderer.Submit(next)
-	writeJSON(w, http.StatusAccepted, struct {
-		Sequence uint64 `json:"sequence"`
-	}{Sequence: sequence})
+	return a.renderer.Submit(next)
 }
 
 func (a *API) listAnimations(w http.ResponseWriter, _ *http.Request) {

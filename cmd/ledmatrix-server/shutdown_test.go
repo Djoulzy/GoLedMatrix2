@@ -79,6 +79,7 @@ func startShutdownServer(t *testing.T, target *shutdownDisplay, action *powerOff
 	settings := appconfig.Default()
 	settings.HTTP.InfoDisplaySeconds = 0
 	settings.Animation.Directory = t.TempDir()
+	settings.Photo.Directory = t.TempDir()
 	cfg := options{backend: "memory", listen: address, config: settings}
 	externalDone := make(chan struct{})
 	var stopOnce sync.Once

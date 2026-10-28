@@ -20,6 +20,7 @@ import (
 	"github.com/Djoulzy/GoLedMatrix2/internal/display"
 	"github.com/Djoulzy/GoLedMatrix2/internal/frame"
 	"github.com/Djoulzy/GoLedMatrix2/internal/marquee"
+	"github.com/Djoulzy/GoLedMatrix2/internal/photo"
 	"github.com/Djoulzy/GoLedMatrix2/internal/render"
 	"github.com/Djoulzy/GoLedMatrix2/internal/server"
 	"github.com/Djoulzy/GoLedMatrix2/internal/technical"
@@ -277,13 +278,18 @@ func serveDisplay(cfg options, target display.Display, backendName string, exter
 	}
 	animationPlayer := animation.NewPlayer(ctx, animationStore, renderer, width, height)
 	defer animationPlayer.Stop()
+	photoStore, err := photo.NewStore(cfg.config.Photo.Directory, width, height)
+	if err != nil {
+		return false, err
+	}
 	marqueePlayer := marquee.NewPlayer(ctx, renderer)
 	defer marqueePlayer.Stop()
 	temperatures := thermal.New()
 	runWorker(func() { temperatures.Run(ctx) })
 	shutdownRequests := make(chan server.ShutdownRequest, 1)
-	apiOptions := make([]server.Option, 0, 7)
+	apiOptions := make([]server.Option, 0, 8)
 	apiOptions = append(apiOptions,
+		server.WithPhotos(photoStore),
 		server.WithShutdown(server.ShutdownInfo{
 			PowerOff: powerOff != nil, PowerOffUnavailableReason: reason,
 		}, func(requestCtx context.Context, request server.ShutdownRequest) error {

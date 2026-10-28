@@ -37,6 +37,9 @@ Color2 = "#AABBCC"
 [Animations]
 Directory = "stored"
 MaxUploadMB = 64
+
+[Photos]
+Directory = "stored-photos"
 `)
 	if loaded.Hardware.ChainLength != 4 || loaded.Hardware.Parallel != 2 {
 		t.Fatalf("unexpected hardware config: %+v", loaded.Hardware)
@@ -64,6 +67,9 @@ MaxUploadMB = 64
 	}
 	if loaded.Animation.Directory != "stored" || loaded.Animation.MaxUploadMB != 64 {
 		t.Fatalf("unexpected animation config: %+v", loaded.Animation)
+	}
+	if loaded.Photo.Directory != "stored-photos" {
+		t.Fatalf("unexpected photo config: %+v", loaded.Photo)
 	}
 	address, err := loaded.HTTP.ListenAddress()
 	if err != nil {
@@ -149,6 +155,17 @@ func TestValidateRejectsInvalidAnimationConfig(t *testing.T) {
 	config.Animation.MaxUploadMB = 0
 	if err := config.Validate(); err == nil {
 		t.Fatal("expected validation error")
+	}
+}
+
+func TestPhotoConfigDefaultAndValidation(t *testing.T) {
+	loaded := loadString(t, "")
+	if loaded.Photo.Directory != "photos" {
+		t.Fatalf("default photo directory = %q", loaded.Photo.Directory)
+	}
+	loaded.Photo.Directory = "  "
+	if err := loaded.Validate(); err == nil {
+		t.Fatal("empty photo directory accepted")
 	}
 }
 
